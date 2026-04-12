@@ -5,7 +5,7 @@ import { ComfyWidgets } from "../../../scripts/widgets.js";
 const EXTENSION_NAME = "yet_essential.prompt_autocomplete";
 const TARGET_NODE_NAME = "YEPromptAutocomplete";
 const TARGET_WIDGET_NAME = "prompt";
-const SEARCH_LIMIT = 20;
+const SEARCH_LIMIT = 200;
 const SEARCH_DEBOUNCE_MS = 120;
 const PROMPT_PLACEHOLDER_HINT = "Autocomplete comes from config/autocomplete.csv";
 const ATTACH_RETRY_INTERVAL_MS = 150;
@@ -89,6 +89,12 @@ class PromptAutocompleteController {
     this.debounceTimer = null;
     this.abortController = null;
     this.cachedRange = null;
+    this.lastSearchQuery = "";
+    this.settings = {
+      spacing_mode: "space",
+      insertion_suffix: ", ",
+      escape_parentheses: true,
+    };
 
     this.boundOnInput = this.onInput.bind(this);
     this.boundOnKeyUp = this.onInput.bind(this);
@@ -129,7 +135,10 @@ class PromptAutocompleteController {
     window.setTimeout(() => this.hide(), 100);
   }
 
-  onInput() {
+  onInput(event) {
+    if (event?.key && ["ArrowUp", "ArrowDown", "Enter", "Tab", "Escape"].includes(event.key)) {
+      return;
+    }
     this.scheduleSearch();
   }
 
@@ -244,13 +253,34 @@ class PromptAutocompleteController {
       return;
     }
 
-    this.renderItems(items);
+    if (payload?.settings) {
+      this.settings = payload.settings;
+    }
+
+    const isNewResults = tokenRange.query !== this.lastSearchQuery;
+    this.lastSearchQuery = tokenRange.query;
+
+    if (isNewResults) {
+      this.activeIndex = 0;
+    }
+
+    this.renderItems(items, payload);
   }
 
-  renderItems(items) {
+  renderItems(items, payload) {
     this.items = items;
-    this.activeIndex = 0;
     this.dropdownEl.innerHTML = "";
+
+    const categoryMap = {
+      0: "General",
+      1: "Artist",
+      3: "Copyright",
+      4: "Character",
+      5: "Meta",
+    };
+
+    const showPostCount = !!payload?.settings?.show_post_count;
+    const showCategoryId = !!payload?.settings?.show_category_id;
 
     items.forEach((item, index) => {
       const row = document.createElement("div");
@@ -261,14 +291,18 @@ class PromptAutocompleteController {
 
       const title = item.label || item.tag || item.insert_text || "";
       const metaParts = [];
-      if (Number.isFinite(item.total_post) && item.total_post > 0) {
+
+      if (showPostCount && Number.isFinite(item.total_post) && item.total_post > 0) {
         metaParts.push(`${item.total_post.toLocaleString()}`);
       }
-      if (Number.isFinite(item.category)) {
-        metaParts.push(`cat ${item.category}`);
-      }
-      if (item.matched_on && item.matched_on !== title) {
-        metaParts.push(`match ${item.matched_on}`);
+
+      const categoryName = categoryMap[item.category] || (Number.isFinite(item.category) ? `Other (${item.category})` : "");
+      if (categoryName) {
+        if (showCategoryId) {
+          metaParts.push(`${categoryName} (${item.category})`);
+        } else {
+          metaParts.push(categoryName);
+        }
       }
 
       const mainEl = document.createElement("div");
@@ -293,6 +327,7 @@ class PromptAutocompleteController {
     });
 
     this.show();
+    this.scrollActiveIntoView();
   }
 
   setActiveIndex(index) {
@@ -301,6 +336,14 @@ class PromptAutocompleteController {
     rows.forEach((row, rowIndex) => {
       row.classList.toggle("ye-autocomplete-item--active", rowIndex === index);
     });
+    this.scrollActiveIntoView();
+  }
+
+  scrollActiveIntoView() {
+    const activeRow = this.dropdownEl.querySelector(".ye-autocomplete-item--active");
+    if (activeRow) {
+      activeRow.scrollIntoView({ block: "nearest", behavior: "auto" });
+    }
   }
 
   insertItem(index) {
@@ -315,17 +358,28 @@ class PromptAutocompleteController {
       return;
     }
 
-    const insertText = item.insert_text || item.label || item.tag;
+    let insertText = item.insert_text || item.label || item.tag;
     if (!insertText) {
       this.hide();
       return;
     }
 
+    // Apply transformations based on settings
+    if (this.settings.spacing_mode === "space") {
+      insertText = insertText.replaceAll("_", " ");
+    }
+
+    if (this.settings.escape_parentheses) {
+      insertText = insertText.replaceAll("(", "\\(").replaceAll(")", "\\)");
+    }
+
+    const suffix = typeof this.settings.insertion_suffix === "string" ? this.settings.insertion_suffix : "";
+
     const fullText = this.inputEl.value ?? "";
     const before = fullText.slice(0, tokenRange.start);
     const after = fullText.slice(tokenRange.end);
     const leadingWhitespace = tokenRange.tokenFragment.match(/^\s*/)?.[0] ?? "";
-    const replacement = `${leadingWhitespace}${insertText}`;
+    const replacement = `${leadingWhitespace}${insertText}${suffix}`;
 
     this.inputEl.value = `${before}${replacement}${after}`;
     const cursor = before.length + replacement.length;
