@@ -3,7 +3,7 @@ import { app } from "../../../scripts/app.js";
 import { ComfyWidgets } from "../../../scripts/widgets.js";
 
 const EXTENSION_NAME = "yet_essential.prompt_autocomplete";
-const TARGET_NODE_NAME = "YEPromptAutocomplete";
+const TARGET_NODE_NAME = "YEPrompt";
 const TARGET_WIDGET_NAME = "prompt";
 const SEARCH_LIMIT = 200;
 const SEARCH_DEBOUNCE_MS = 120;
