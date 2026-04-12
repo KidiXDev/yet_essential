@@ -459,10 +459,20 @@ const attachTimerMap = new WeakMap();
 let activeController = null;
 
 function isTextInputElement(inputEl) {
-    return (
-        inputEl instanceof HTMLInputElement ||
-        inputEl instanceof HTMLTextAreaElement
-    );
+    if (!inputEl) return false;
+    if (inputEl instanceof HTMLTextAreaElement) return true;
+    if (inputEl instanceof HTMLInputElement) {
+        const textTypes = [
+            "text",
+            "password",
+            "email",
+            "search",
+            "url",
+            "tel",
+        ];
+        return textTypes.includes(inputEl.type) || !inputEl.type;
+    }
+    return false;
 }
 
 function markTargetInputElement(inputEl) {
@@ -588,9 +598,6 @@ function attachPromptAutocomplete(inputEl) {
     const existing = controllerMap.get(inputEl);
     if (existing) {
         activeController = existing;
-        if (document.activeElement === inputEl) {
-            existing.scheduleSearch();
-        }
         return;
     }
 
@@ -822,12 +829,9 @@ function installGlobalHooks() {
 
     const handleInteraction = (event) => {
         const target = getInputFromComposedEvent(event);
-        if (tryAttachFromElement(target)) {
-            return;
+        if (target) {
+            tryAttachFromElement(target);
         }
-
-        const active = getDeepActiveElement();
-        tryAttachFromElement(active);
     };
 
     document.addEventListener("focusin", handleInteraction, true);
