@@ -1,183 +1,247 @@
 import { app } from "../../scripts/app.js";
-import { ComfyWidgets } from "../../scripts/widgets.js";
+import { $el } from "../../scripts/ui.js";
 
-console.log("YE Model Preview: Applying Iron-Clad event isolation...");
+const IMAGE_SIZE = 300;
 
 const STYLES = `
-.ye-modal-overlay {
-    position: fixed;
-    top: 0; left: 0; width: 100%; height: 100%;
-    background: rgba(0, 0, 0, 0.95);
+.ye-combo-image {
+    position: absolute;
+    width: ${IMAGE_SIZE}px;
+    height: ${IMAGE_SIZE}px;
+    object-fit: contain;
+    background: #000;
+    border: 1px solid #444;
+    border-radius: 8px;
     z-index: 10001;
-    display: flex; justify-content: center; align-items: center;
-    backdrop-filter: blur(12px);
+    pointer-events: none;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+    transition: opacity 0.1s;
 }
-.ye-modal {
-    width: 95vw; height: 90vh;
-    background: #080808; border: 1px solid #333; border-radius: 12px;
-    display: flex; flex-direction: column; overflow: hidden; color: #eee;
+
+.ye-combo-grid {
+    display: grid !important;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 8px;
+    max-width: 80vw;
+    max-height: 80vh !important;
+    overflow-y: auto !important;
+    padding: 10px !important;
+    background: #111 !important;
 }
-.ye-modal-header {
-    padding: 20px 30px; border-bottom: 1px solid #222;
-    display: flex; justify-content: space-between; align-items: center;
+
+.ye-combo-grid .litemenu-entry {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+    height: 180px !important;
+    border: 1px solid #333;
+    border-radius: 6px;
+    background-size: cover;
+    background-repeat: no-repeat;
+    background-position: center center;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: hidden;
+    position: relative;
+    color: #fff;
+    text-shadow: 0 1px 4px rgba(0,0,0,0.8);
+    background-color: #050505;
+}
+
+.ye-combo-grid .litemenu-entry:hover {
+    background-color: #1a1a1a;
+    border-color: #888;
+    z-index: 2;
+}
+
+.ye-combo-grid .litemenu-entry span {
+    background: rgba(0,0,0,0.7);
+    width: 100%;
+    text-align: center;
+    padding: 4px 2px;
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ye-combo-grid .comfy-context-menu-filter {
+    grid-column: 1 / -1;
+    position: sticky;
+    top: -10px;
+    z-index: 10;
     background: #111;
+    padding: 5px 0;
 }
-.ye-search {
-    flex: 1; margin: 0 40px; background: #000; border: 1px solid #444;
-    color: #fff; padding: 12px 20px; border-radius: 8px; font-size: 16px;
-    outline: none;
+
+.ye-combo-grid .litemenu-entry.selected {
+    border-color: #4a90e2;
+    background-color: #003366;
 }
-.ye-grid {
-    flex: 1; overflow-y: auto; padding: 30px;
-    display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); grid-auto-rows: min-content; gap: 30px;
-}
-.ye-card {
-    background: #121212; border-radius: 10px; overflow: hidden; cursor: pointer; border: 1px solid #222;
-    display: flex; flex-direction: column; height: 380px;
-}
-.ye-card:hover { border-color: #666; background: #1a1a1a; }
-.ye-card-img-container { flex: 1; width: 100%; display: flex; align-items: center; justify-content: center; overflow: hidden; pointer-events: none; }
-.ye-card-img { width: 100%; height: 100%; object-fit: cover; }
-.ye-card-title { padding: 15px; font-size: 12px; text-align: center; border-top: 1px solid #222; color: #888; pointer-events: none; }
-.ye-close-btn { background: #444; border: none; color: #fff; cursor: pointer; padding: 10px 30px; border-radius: 6px; font-weight: bold; }
 `;
 
-// Strongest possible state lockout
-window.ye_browser_active = false;
-let ye_lockout_until = 0;
+const YE_NODES = ["YELoadCheckpoint", "YELoadDiffusionModel", "YELoadLora", "YELoadLoraModel"];
 
-class ModelBrowser {
-    constructor(folderType, onSelect) {
-        this.folderType = folderType;
-        this.onSelect = onSelect;
-        this.allModels = [];
-        this.el = null;
+function getFolderType(node, widgetName) {
+    if (widgetName === "ckpt_name") return "checkpoints";
+    if (widgetName === "unet_name") return "diffusion_models";
+    if (widgetName === "lora_name") return "loras";
+    return null;
+}
+
+class YENativeModelPreview {
+    constructor() {
+        this.imageHost = $el("img.ye-combo-image", { style: { display: "none" } });
+        document.body.appendChild(this.imageHost);
+        this.setupStyles();
+        this.setupObserver();
     }
 
-    async show() {
-        if (window.ye_browser_active) return;
-        try {
-            const r = await fetch(`/yet_essential/model/list?type=${encodeURIComponent(this.folderType)}`);
-            this.allModels = await r.json();
-            window.ye_browser_active = true;
-            this.render();
-        } catch (e) { console.error("YE Error:", e); }
+    setupStyles() {
+        const s = document.createElement("style");
+        s.id = "ye-native-styles";
+        s.innerText = STYLES;
+        document.head.appendChild(s);
     }
 
-    render(filter = "") {
-        if (!this.el) {
-            if (!document.getElementById("ye-styles")) {
-                const s = document.createElement("style");
-                s.id = "ye-styles"; s.innerText = STYLES; document.head.appendChild(s);
+    setupObserver() {
+        // Watch for context menus
+        const observer = new MutationObserver((mutations) => {
+            for (const mutation of mutations) {
+                for (const added of mutation.addedNodes) {
+                    if (added.classList?.contains("litecontextmenu")) {
+                        // Delay slightly to allow ComfyUI extensions to populate the menu (like filter)
+                        requestAnimationFrame(() => this.handleContextMenu(added));
+                    }
+                }
+                for (const removed of mutation.removedNodes) {
+                    if (removed.classList?.contains("litecontextmenu")) {
+                        this.hideImage();
+                    }
+                }
             }
-            this.el = document.createElement("div");
-            this.el.className = "ye-modal-overlay";
-            this.el.innerHTML = `<div class="ye-modal">
-                <div class="ye-modal-header">
-                    <div style="font-weight:bold; font-size:18px; color: #666;">BROWSER: ${this.folderType.toUpperCase()}</div>
-                    <input type="text" class="ye-search" placeholder="Filter..." />
-                    <button class="ye-close-btn">CANCEL</button>
-                </div>
-                <div class="ye-grid"></div>
-            </div>`;
-            document.body.appendChild(this.el);
-            
-            // IRON-CLAD: Stop ALL mouse signaling from leaking to background
-            const stop = (e) => { e.stopPropagation(); e.stopImmediatePropagation(); };
-            this.el.addEventListener("mousedown", stop);
-            this.el.addEventListener("mouseup", stop);
-            this.el.addEventListener("click", stop);
-            this.el.addEventListener("pointerdown", stop);
-            this.el.addEventListener("pointerup", stop);
-            this.el.addEventListener("wheel", stop);
+        });
+        observer.observe(document.body, { childList: true });
+    }
 
-            this.el.querySelector(".ye-close-btn").onclick = (e) => this.close();
-            this.el.querySelector(".ye-search").oninput = (e) => this.render(e.target.value);
-            this.el.onmousedown = (e) => { if(e.target === this.el) this.close(); };
-            setTimeout(() => this.el.querySelector(".ye-search").focus(), 100);
+    hideImage() {
+        this.imageHost.style.display = "none";
+        this.imageHost.src = "";
+    }
+
+    showImage(item, type, name) {
+        if (!name || name === "Cancel" || name === "Filter") return;
+        
+        const rect = item.getBoundingClientRect();
+        const bodyRect = document.body.getBoundingClientRect();
+        
+        let x = rect.right + 10;
+        let y = rect.top;
+
+        if (x + IMAGE_SIZE + 20 > bodyRect.width) {
+            x = rect.left - IMAGE_SIZE - 10;
+        }
+        
+        const constrainedY = Math.min(y, bodyRect.height - IMAGE_SIZE - 10);
+        y = Math.max(10, constrainedY);
+
+        this.imageHost.src = `/yet_essential/model/preview?type=${encodeURIComponent(type)}&name=${encodeURIComponent(name)}`;
+        this.imageHost.style.left = `${x}px`;
+        this.imageHost.style.top = `${y}px`;
+        this.imageHost.style.display = "block";
+    }
+
+    async handleContextMenu(menu) {
+        console.log("YE Debug: Context menu detected");
+        
+        let node = app.canvas.current_node;
+        if (!node && app.canvas.selected_nodes) {
+             const selectedIds = Object.keys(app.canvas.selected_nodes);
+             if (selectedIds.length > 0) {
+                 node = app.canvas.selected_nodes[selectedIds[0]];
+             }
+        }
+        
+        if (!node) {
+            console.log("YE Debug: No active node found");
+            return;
         }
 
-        const grid = this.el.querySelector(".ye-grid");
-        grid.innerHTML = "";
-        this.allModels.filter(m => m.name.toLowerCase().includes(filter.toLowerCase())).forEach(model => {
-            const card = document.createElement("div");
-            card.className = "ye-card";
-            card.innerHTML = `
-                <div class="ye-card-img-container">
-                    ${model.has_preview ? `<img class="ye-card-img" src="/yet_essential/model/preview?type=${encodeURIComponent(this.folderType)}&name=${encodeURIComponent(model.name)}">` : `<span style="color:#222;">N/A</span>`}
-                </div>
-                <div class="ye-card-title">${model.name}</div>
-            `;
-            
-            // Selection on click, but eat the event entirely
-            card.onclick = (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                e.stopImmediatePropagation();
-                console.log("YE Browser: Finalizing selection", model.name);
-                this.onSelect(model.name);
-                this.close();
-            };
-            grid.appendChild(card);
-        });
-    }
+        const nodeClass = node.comfyClass || node.type;
+        console.log("YE Debug: Node class is", nodeClass);
+        
+        if (!YE_NODES.includes(nodeClass)) {
+            console.log("YE Debug: Not a YE node");
+            return;
+        }
 
-    close() { 
-        if (this.el) { 
-            ye_lockout_until = Date.now() + 1000; // 1 second iron-clad lockout
-            window.ye_browser_active = false;
-            this.el.remove(); 
-            this.el = null; 
-            console.log("YE Browser: Gallery closed.");
-        } 
+        const overWidget = node.widgets?.find(w => w.name && getFolderType(node, w.name)) || app.canvas.getWidgetAtCursor();
+        if (!overWidget) {
+            console.log("YE Debug: No model widget found at cursor");
+            return;
+        }
+
+        const folderType = getFolderType(node, overWidget.name);
+        if (!folderType) {
+            console.log("YE Debug: Widget is not a model selection widget", overWidget.name);
+            return;
+        }
+
+        const items = menu.querySelectorAll(".litemenu-entry");
+        if (!items.length) {
+            console.log("YE Debug: Menu has no items yet");
+            // If items are not yet populated, we might need another frame
+            requestAnimationFrame(() => {
+                const retryItems = menu.querySelectorAll(".litemenu-entry");
+                if (retryItems.length) this.handleContextMenu(menu);
+            });
+            return;
+        }
+
+        console.log("YE Debug: Applying YE Grid Mode to", folderType);
+        
+        // Apply grid mode
+        menu.classList.add("ye-combo-grid");
+        
+        items.forEach(item => {
+            let name = item.getAttribute("data-value") || item.innerText.trim();
+            
+            if (!name || name === "Cancel" || name === "Filter") return;
+
+            // Wrap text in a span for better styling over image
+            const cleanName = name.split(/[\\\/]/).pop();
+            item.innerHTML = `<span>${cleanName}</span>`;
+            
+            const url = `/yet_essential/model/preview?type=${encodeURIComponent(folderType)}&name=${encodeURIComponent(name)}`;
+            item.style.backgroundImage = `url("${url}")`;
+
+            item.addEventListener("mouseenter", () => {
+                this.showImage(item, folderType, name);
+            });
+            item.addEventListener("mouseleave", () => {
+                this.hideImage();
+            });
+        });
+        
+        // Final position correction
+        const menuRect = menu.getBoundingClientRect();
+        const bodyRect = document.body.getBoundingClientRect();
+        if (menuRect.right > bodyRect.width) {
+            menu.style.left = Math.max(0, bodyRect.width - menuRect.width - 20) + "px";
+        }
+        if (menuRect.bottom > bodyRect.height) {
+            menu.style.top = Math.max(0, bodyRect.height - menuRect.height - 20) + "px";
+        }
     }
 }
 
-ComfyWidgets["YE_MODEL_SELECT"] = function(node, inputName, inputData, app) {
-    const folderType = inputData[1]?.folder || "checkpoints";
-    
-    // NATIVE BUTTON BRIDGE
-    const widget = node.addWidget("button", inputName, "Select Model...", () => {
-        if (window.ye_browser_active) return;
-        if (Date.now() < ye_lockout_until) return;
-
-        const browser = new ModelBrowser(folderType, (val) => {
-            widget.value = val;
-            if (widget.callback) widget.callback(val);
-        });
-        browser.show();
-    });
-
-    widget.type = "YE_MODEL_SELECT";
-    widget.value = inputData[1]?.default || "";
-    widget.serializeValue = async () => widget.value;
-    widget.h = 28; // Standard height to prevent overlap
-
-    widget.draw = function(ctx, node, width, y, spare) {
-        const margin = 15;
-        const w = width - margin * 2;
-        const h = 28;
-        
-        const isHover = this.mouse_over;
-        ctx.fillStyle = isHover ? "#2a2a2a" : "#0d0d0d"; 
-        ctx.strokeStyle = isHover ? "#555" : "#222";
-        ctx.beginPath(); ctx.roundRect(margin, y, w, h, 4); ctx.fill(); ctx.stroke();
-        ctx.fillStyle = isHover ? "#fff" : "#999"; ctx.font = "11px sans-serif";
-        const txt = this.value || "Select Model...";
-        ctx.save(); ctx.beginPath(); ctx.rect(margin + 5, y, w - 25, h); ctx.clip();
-        ctx.fillText(txt, margin + 8, y + (h / 2) + 4); ctx.restore();
-        
-        ctx.fillStyle = isHover ? "#888" : "#444";
-        const dotX = margin + w - 10;
-        const dotY = y + (h / 2);
-        for(let i=0; i<3; i++) {
-            ctx.beginPath(); ctx.arc(dotX, dotY - 4 + (i*4), 1.2, 0, Math.PI * 2); ctx.fill();
-        }
-    };
-
-    return widget;
-};
-
 app.registerExtension({
-    name: "yet_essential.model_browser"
+    name: "yet_essential.native_previews",
+    init() {
+        // Initialize once
+        if (!window.ye_native_preview_instance) {
+            window.ye_native_preview_instance = new YENativeModelPreview();
+        }
+    }
 });

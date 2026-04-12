@@ -285,7 +285,7 @@ class YELoadCheckpoint:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "ckpt_name": ("YE_MODEL_SELECT", {"folder": "checkpoints"}),
+                "ckpt_name": (folder_paths.get_filename_list("checkpoints"),),
             }
         }
 
@@ -304,7 +304,7 @@ class YELoadDiffusionModel:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "unet_name": ("YE_MODEL_SELECT", {"folder": "diffusion_models"}),
+                "unet_name": (folder_paths.get_filename_list("diffusion_models"),),
             }
         }
 
@@ -325,7 +325,7 @@ class YELoadLora:
             "required": {
                 "model": ("MODEL",),
                 "clip": ("CLIP",),
-                "lora_name": ("YE_MODEL_SELECT", {"folder": "loras"}),
+                "lora_name": (folder_paths.get_filename_list("loras"),),
                 "strength_model": ("FLOAT", {"default": 1.0, "min": -20.0, "max": 20.0, "step": 0.01}),
                 "strength_clip": ("FLOAT", {"default": 1.0, "min": -20.0, "max": 20.0, "step": 0.01}),
             }
@@ -351,7 +351,7 @@ class YELoadLoraModel:
         return {
             "required": {
                 "model": ("MODEL",),
-                "lora_name": ("YE_MODEL_SELECT", {"folder": "loras"}),
+                "lora_name": (folder_paths.get_filename_list("loras"),),
                 "strength_model": ("FLOAT", {"default": 1.0, "min": -20.0, "max": 20.0, "step": 0.01}),
             }
         }
