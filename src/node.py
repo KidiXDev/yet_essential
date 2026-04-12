@@ -31,7 +31,6 @@ class YEPrompt:
                         "dynamicPrompts": True,
                         "yet_essential.autocomplete": True,
                         "default": "",
-                        "placeholder": f"Type a prompt. Autocomplete comes from config/tag/{SETTINGS.csv_file}",
                     },
                 )
             }
@@ -44,6 +43,39 @@ class YEPrompt:
 
     def output_prompt(self, prompt: str) -> tuple[str]:
         return (prompt,)
+
+
+class YEClipTextEncodePrompt:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "clip": ("CLIP",),
+                "prompt": (
+                    "STRING",
+                    {
+                        "multiline": True,
+                        "dynamicPrompts": True,
+                        "yet_essential.autocomplete": True,
+                        "default": "",
+                    },
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("CONDITIONING",)
+    RETURN_NAMES = ("conditioning",)
+    FUNCTION = "encode"
+    CATEGORY = "yet_essential/prompt"
+
+    def encode(self, clip, prompt):
+        if clip is None:
+            raise RuntimeError(
+                "YEClipTextEncodePrompt: clip input is invalid (None). "
+                "Ensure your checkpoint/model loader outputs a valid CLIP."
+            )
+        tokens = clip.tokenize(prompt)
+        return (clip.encode_from_tokens_scheduled(tokens),)
 
 
 class YEImageUpscale:
@@ -701,6 +733,7 @@ class YEPostFXApplyPipeline:
 
 NODE_CLASS_MAPPINGS = {
     "YEPrompt": YEPrompt,
+    "YEClipTextEncodePrompt": YEClipTextEncodePrompt,
     "YEImageUpscale": YEImageUpscale,
     "YEKSampler": YEKSampler,
     "YEEmptyLatentImage": YEEmptyLatentImage,
@@ -718,6 +751,7 @@ NODE_CLASS_MAPPINGS = {
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "YEPrompt": "YE Prompt",
+    "YEClipTextEncodePrompt": "YE Clip Text Encode (Prompt)",
     "YEImageUpscale": "YE Image Upscale",
     "YEKSampler": "YE KSampler",
     "YEEmptyLatentImage": "YE Empty Latent Image",

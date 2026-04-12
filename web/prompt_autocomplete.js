@@ -3,7 +3,7 @@ import { app } from "../../scripts/app.js";
 import { ComfyWidgets } from "../../scripts/widgets.js";
 
 const EXTENSION_NAME = "yet_essential.prompt_autocomplete";
-const TARGET_NODE_NAME = "YEPrompt";
+const TARGET_NODE_NAMES = new Set(["YEPrompt", "YEClipTextEncodePrompt"]);
 const TARGET_WIDGET_NAME = "prompt";
 const SEARCH_LIMIT = 200;
 const SEARCH_DEBOUNCE_MS = 120;
@@ -514,9 +514,9 @@ function isTargetNode(node) {
     if (!node) {
         return false;
     }
-    return (
-        node.comfyClass === TARGET_NODE_NAME || node.type === TARGET_NODE_NAME
-    );
+    const comfyClass = node.comfyClass;
+    const type = node.type;
+    return TARGET_NODE_NAMES.has(comfyClass) || TARGET_NODE_NAMES.has(type);
 }
 
 function isLikelyTargetInput(inputEl) {
@@ -860,10 +860,7 @@ function shouldAttachFromNodeAndWidgetName(node, inputName) {
         return false;
     }
 
-    if (
-        node?.comfyClass === TARGET_NODE_NAME ||
-        node?.type === TARGET_NODE_NAME
-    ) {
+    if (isTargetNode(node)) {
         return true;
     }
 
@@ -1200,23 +1197,17 @@ async function getTagFiles() {
             }
         },
         nodeCreated(node) {
-            if (
-                node?.comfyClass === TARGET_NODE_NAME ||
-                node?.type === TARGET_NODE_NAME
-            ) {
+            if (isTargetNode(node)) {
                 scheduleAttachFromNode(node);
             }
         },
         loadedGraphNode(node) {
-            if (
-                node?.comfyClass === TARGET_NODE_NAME ||
-                node?.type === TARGET_NODE_NAME
-            ) {
+            if (isTargetNode(node)) {
                 scheduleAttachFromNode(node);
             }
         },
         async beforeRegisterNodeDef(nodeType, nodeData) {
-            if (nodeData.name !== TARGET_NODE_NAME) {
+            if (!TARGET_NODE_NAMES.has(nodeData.name)) {
                 return;
             }
 
