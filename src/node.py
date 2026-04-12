@@ -1,4 +1,6 @@
 from __future__ import annotations
+import os
+import uuid
 from typing import Any
 
 import comfy.model_management as model_management
@@ -8,8 +10,10 @@ import comfy.sd
 import comfy.utils
 import folder_paths
 import latent_preview
+import numpy as np
 import torch
 import torch.nn.functional as F
+from PIL import Image
 from spandrel import ImageModelDescriptor, ModelLoader
 
 from .core import BASE_DIR, SETTINGS_PATH, Settings, TagAutocompleteIndex, slerp_noise, MODEL_PREVIEW_MANAGER, SETTINGS, TAG_INDEX
@@ -171,6 +175,76 @@ class YESeedGenerator:
 
     def generate_seed(self, seed):
         return (int(seed),)
+
+
+class YEImageComparer:
+    def __init__(self):
+        self.output_dir = folder_paths.get_temp_directory()
+        self.type = "temp"
+        self.prefix_append = f"_temp_{uuid.uuid4().hex[:5]}"
+        self.compress_level = 1
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {},
+            "optional": {
+                "image_a": ("IMAGE",),
+                "image_b": ("IMAGE",),
+            },
+            "hidden": {
+                "prompt": "PROMPT",
+                "extra_pnginfo": "EXTRA_PNGINFO",
+            },
+        }
+
+    RETURN_TYPES = ()
+    FUNCTION = "compare_images"
+    OUTPUT_NODE = True
+    CATEGORY = "yet_essential/utils"
+
+    def _save_temp_images(self, images, filename_prefix):
+        filename_prefix = f"{filename_prefix}{self.prefix_append}"
+        full_output_folder, filename, counter, subfolder, filename_prefix = folder_paths.get_save_image_path(
+            filename_prefix,
+            self.output_dir,
+            images[0].shape[1],
+            images[0].shape[0],
+        )
+
+        results = []
+        for batch_number, image in enumerate(images):
+            i = 255.0 * image.cpu().numpy()
+            img = Image.fromarray(np.clip(i, 0, 255).astype(np.uint8))
+
+            filename_with_batch_num = filename.replace("%batch_num%", str(batch_number))
+            file = f"{filename_with_batch_num}_{counter:05}_.png"
+            img.save(
+                os.path.join(full_output_folder, file),
+                compress_level=self.compress_level,
+            )
+
+            results.append(
+                {
+                    "filename": file,
+                    "subfolder": subfolder,
+                    "type": self.type,
+                }
+            )
+            counter += 1
+
+        return results
+
+    def compare_images(self, image_a=None, image_b=None, prompt=None, extra_pnginfo=None):
+        result = {"ui": {"a_images": [], "b_images": []}}
+
+        if image_a is not None and len(image_a) > 0:
+            result["ui"]["a_images"] = self._save_temp_images(image_a, "ye.compare.a")
+
+        if image_b is not None and len(image_b) > 0:
+            result["ui"]["b_images"] = self._save_temp_images(image_b, "ye.compare.b")
+
+        return result
 
 
 class YEKSampler:
@@ -631,6 +705,7 @@ NODE_CLASS_MAPPINGS = {
     "YEKSampler": YEKSampler,
     "YEEmptyLatentImage": YEEmptyLatentImage,
     "YESeedGenerator": YESeedGenerator,
+    "YEImageComparer": YEImageComparer,
     "YELoadCheckpoint": YELoadCheckpoint,
     "YELoadDiffusionModel": YELoadDiffusionModel,
     "YELoadLora": YELoadLora,
@@ -647,6 +722,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "YEKSampler": "YE KSampler",
     "YEEmptyLatentImage": "YE Empty Latent Image",
     "YESeedGenerator": "YE Seed Generator",
+    "YEImageComparer": "YE Image Comparer",
     "YELoadCheckpoint": "YE Load Checkpoint",
     "YELoadDiffusionModel": "YE Load Diffusion Model",
     "YELoadLora": "YE Load LoRA",
