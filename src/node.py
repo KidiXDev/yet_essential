@@ -153,6 +153,26 @@ class YEEmptyLatentImage:
         return ({"samples": latent},)
 
 
+class YESeedGenerator:
+    MAX_SEED = 0x7FFFFFFFFFFFFFFF
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "seed": ("INT", {"default": 0, "min": 0, "max": cls.MAX_SEED}),
+            }
+        }
+
+    RETURN_TYPES = ("INT",)
+    RETURN_NAMES = ("seed",)
+    FUNCTION = "generate_seed"
+    CATEGORY = "yet_essential/utils"
+
+    def generate_seed(self, seed):
+        return (int(seed),)
+
+
 class YEKSampler:
     @classmethod
     def INPUT_TYPES(cls):
@@ -610,6 +630,7 @@ NODE_CLASS_MAPPINGS = {
     "YEImageUpscale": YEImageUpscale,
     "YEKSampler": YEKSampler,
     "YEEmptyLatentImage": YEEmptyLatentImage,
+    "YESeedGenerator": YESeedGenerator,
     "YELoadCheckpoint": YELoadCheckpoint,
     "YELoadDiffusionModel": YELoadDiffusionModel,
     "YELoadLora": YELoadLora,
@@ -625,6 +646,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "YEImageUpscale": "YE Image Upscale",
     "YEKSampler": "YE KSampler",
     "YEEmptyLatentImage": "YE Empty Latent Image",
+    "YESeedGenerator": "YE Seed Generator",
     "YELoadCheckpoint": "YE Load Checkpoint",
     "YELoadDiffusionModel": "YE Load Diffusion Model",
     "YELoadLora": "YE Load LoRA",
