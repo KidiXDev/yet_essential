@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from typing import Any
 
 import comfy.model_management as model_management
@@ -15,7 +16,7 @@ from aiohttp import web
 from server import PromptServer
 from spandrel import ImageModelDescriptor, ModelLoader
 
-from .core import AUTOCOMPLETE_CSV_PATH, SETTINGS_PATH, Settings, TagAutocompleteIndex, slerp_noise
+from .core import AUTOCOMPLETE_CSV_PATH, SETTINGS_PATH, Settings, TagAutocompleteIndex, slerp_noise, MODEL_PREVIEW_MANAGER
 
 TAG_INDEX = TagAutocompleteIndex(AUTOCOMPLETE_CSV_PATH)
 SETTINGS = Settings(SETTINGS_PATH)
@@ -48,6 +49,31 @@ async def search_autocomplete(request: web.Request) -> web.Response:
             ),
         }
     )
+
+
+@PromptServer.instance.routes.get("/yet_essential/model/preview")
+async def get_model_preview(request: web.Request) -> web.Response:
+    folder_type = request.query.get("type", "")
+    model_name = request.query.get("name", "")
+    
+    if not folder_type or not model_name:
+        return web.Response(status=400)
+        
+    preview_path = MODEL_PREVIEW_MANAGER.find_preview(folder_type, model_name)
+    if not preview_path or not os.path.exists(preview_path):
+        return web.Response(status=404)
+        
+    return web.FileResponse(preview_path)
+
+
+@PromptServer.instance.routes.get("/yet_essential/model/list")
+async def get_model_list(request: web.Request) -> web.Response:
+    folder_type = request.query.get("type", "")
+    if not folder_type:
+        return web.Response(status=400)
+    
+    models = MODEL_PREVIEW_MANAGER.list_models_with_previews(folder_type)
+    return web.json_response(models)
 
 
 class YEPrompt:
@@ -105,7 +131,7 @@ class YEImageUpscale:
 
         upscale_model_obj = ModelLoader().load_from_state_dict(sd).eval()
         if not isinstance(upscale_model_obj, ImageModelDescriptor):
-            raise Exception("YEImageUpscaleWithModel: Upscale model must be a single-image upscaler.")
+            raise Exception("YEImageUpscale: Upscale model must be a single-image upscaler.")
 
         in_img = image.movedim(-1, -3).to(device)
         memory_required = model_management.module_size(upscale_model_obj.model)
@@ -254,11 +280,105 @@ class YEKSampler:
         return (out,)
 
 
+class YELoadCheckpoint:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "ckpt_name": ("YE_MODEL_SELECT", {"folder": "checkpoints"}),
+            }
+        }
+
+    RETURN_TYPES = ("MODEL", "CLIP", "VAE")
+    FUNCTION = "load_checkpoint"
+    CATEGORY = "yet_essential/loaders"
+
+    def load_checkpoint(self, ckpt_name):
+        ckpt_path = folder_paths.get_full_path("checkpoints", ckpt_name)
+        out = comfy.sd.load_checkpoint_guess_config(ckpt_path, output_vae=True, output_clip=True, embedding_directory=folder_paths.get_folder_paths("embeddings"))
+        return out[:3]
+
+
+class YELoadDiffusionModel:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "unet_name": ("YE_MODEL_SELECT", {"folder": "diffusion_models"}),
+            }
+        }
+
+    RETURN_TYPES = ("MODEL",)
+    FUNCTION = "load_unet"
+    CATEGORY = "yet_essential/loaders"
+
+    def load_unet(self, unet_name):
+        unet_path = folder_paths.get_full_path("diffusion_models", unet_name)
+        model = comfy.sd.load_diffusion_model(unet_path)
+        return (model,)
+
+
+class YELoadLora:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL",),
+                "clip": ("CLIP",),
+                "lora_name": ("YE_MODEL_SELECT", {"folder": "loras"}),
+                "strength_model": ("FLOAT", {"default": 1.0, "min": -20.0, "max": 20.0, "step": 0.01}),
+                "strength_clip": ("FLOAT", {"default": 1.0, "min": -20.0, "max": 20.0, "step": 0.01}),
+            }
+        }
+
+    RETURN_TYPES = ("MODEL", "CLIP")
+    FUNCTION = "load_lora"
+    CATEGORY = "yet_essential/loaders"
+
+    def load_lora(self, model, clip, lora_name, strength_model, strength_clip):
+        if strength_model == 0 and strength_clip == 0:
+            return (model, clip)
+
+        lora_path = folder_paths.get_full_path("loras", lora_name)
+        lora = comfy.utils.load_torch_file(lora_path, safe_load=True)
+        model_lora, clip_lora = comfy.sd.load_lora_for_models(model, clip, lora, strength_model, strength_clip)
+        return (model_lora, clip_lora)
+
+
+class YELoadLoraModel:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL",),
+                "lora_name": ("YE_MODEL_SELECT", {"folder": "loras"}),
+                "strength_model": ("FLOAT", {"default": 1.0, "min": -20.0, "max": 20.0, "step": 0.01}),
+            }
+        }
+
+    RETURN_TYPES = ("MODEL",)
+    FUNCTION = "load_lora_model"
+    CATEGORY = "yet_essential/loaders"
+
+    def load_lora_model(self, model, lora_name, strength_model):
+        if strength_model == 0:
+            return (model,)
+
+        lora_path = folder_paths.get_full_path("loras", lora_name)
+        lora = comfy.utils.load_torch_file(lora_path, safe_load=True)
+        model_lora, _ = comfy.sd.load_lora_for_models(model, None, lora, strength_model, 0)
+        return (model_lora,)
+
+
 NODE_CLASS_MAPPINGS = {
     "YEPrompt": YEPrompt,
     "YEImageUpscale": YEImageUpscale,
     "YEKSampler": YEKSampler,
     "YEEmptyLatentImage": YEEmptyLatentImage,
+    "YELoadCheckpoint": YELoadCheckpoint,
+    "YELoadDiffusionModel": YELoadDiffusionModel,
+    "YELoadLora": YELoadLora,
+    "YELoadLoraModel": YELoadLoraModel,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -266,4 +386,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "YEImageUpscale": "YE Image Upscale",
     "YEKSampler": "YE KSampler",
     "YEEmptyLatentImage": "YE Empty Latent Image",
+    "YELoadCheckpoint": "YE Load Checkpoint",
+    "YELoadDiffusionModel": "YE Load Diffusion Model",
+    "YELoadLora": "YE Load LoRA",
+    "YELoadLoraModel": "YE Load LoRA (Model Only)",
 }

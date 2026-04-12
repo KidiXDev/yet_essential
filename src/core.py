@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
+import folder_paths
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 AUTOCOMPLETE_CSV_PATH = BASE_DIR / "config" / "autocomplete.csv"
@@ -289,3 +290,66 @@ def slerp_noise(noise_a: torch.Tensor, noise_b: torch.Tensor, strength: float) -
 
     out = torch.where(near_linear, lerp, interp)
     return out.reshape_as(noise_a)
+
+
+class ModelPreviewManager:
+    def __init__(self) -> None:
+        self._cache: dict[str, str | None] = {}
+        self._lock = threading.Lock()
+        self._supported_exts = [".png", ".jpg", ".jpeg", ".webp"]
+
+    def find_preview(self, folder_type: str, model_name: str) -> str | None:
+        cache_key = f"{folder_type}:{model_name}"
+        with self._lock:
+            if cache_key in self._cache:
+                return self._cache[cache_key]
+
+        preview_path = self._find_on_disk(folder_type, model_name)
+        with self._lock:
+            self._cache[cache_key] = preview_path
+        return preview_path
+
+    def _find_on_disk(self, folder_type: str, model_name: str) -> str | None:
+        full_path = folder_paths.get_full_path(folder_type, model_name)
+        if not full_path:
+            return None
+
+        p = Path(full_path)
+        parent = p.parent
+        # model.safetensors -> model
+        base_name = p.stem 
+        # model.safetensors -> model.safetensors
+        full_name = p.name
+
+        # Patterns to check
+        # 1. model.preview.jpg
+        # 2. model.safetensors.preview.jpg
+        # 3. model.jpg
+        # 4. model.safetensors.jpg
+        
+        candidates = []
+        for ext in self._supported_exts:
+            candidates.append(parent / f"{base_name}.preview{ext}")
+            candidates.append(parent / f"{full_name}.preview{ext}")
+            candidates.append(parent / f"{base_name}{ext}")
+            candidates.append(parent / f"{full_name}{ext}")
+
+        for cand in candidates:
+            if cand.is_file():
+                return str(cand)
+
+        return None
+
+    def list_models_with_previews(self, folder_type: str) -> list[dict[str, Any]]:
+        models = folder_paths.get_filename_list(folder_type)
+        results = []
+        for model_name in models:
+            preview_path = self.find_preview(folder_type, model_name)
+            results.append({
+                "name": model_name,
+                "has_preview": preview_path is not None
+            })
+        return results
+
+
+MODEL_PREVIEW_MANAGER = ModelPreviewManager()
