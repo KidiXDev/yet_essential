@@ -3,7 +3,6 @@ import { api } from "../../scripts/api.js";
 
 const EXTENSION_NAME = "yet_essential.image_compare";
 const TARGET_NODE_NAME = "YEImageComparer";
-const IS_V2_FRONTEND = typeof window !== "undefined" && !!window.comfyAPI;
 const MIN_NODE_WIDTH = 420;
 const MIN_NODE_HEIGHT = 320;
 const PAD_X = 12;
@@ -22,7 +21,8 @@ function createState() {
         beforeRef: { url: "", img: null },
         afterRef: { url: "", img: null },
         dom: null,
-        useDom: IS_V2_FRONTEND,
+        domWidget: null,
+        useDom: true,
     };
 }
 
@@ -73,6 +73,25 @@ function fitContain(srcW, srcH, dstX, dstY, dstW, dstH) {
     return { x: dstX + (dstW - w) * 0.5, y: dstY, w, h };
 }
 
+function fitCover(srcW, srcH, dstX, dstY, dstW, dstH) {
+    if (!srcW || !srcH || !dstW || !dstH) {
+        return { x: dstX, y: dstY, w: 0, h: 0 };
+    }
+
+    const srcAspect = srcW / srcH;
+    const dstAspect = dstW / dstH;
+
+    if (srcAspect > dstAspect) {
+        const h = dstH;
+        const w = h * srcAspect;
+        return { x: dstX + (dstW - w) * 0.5, y: dstY, w, h };
+    }
+
+    const w = dstW;
+    const h = w / srcAspect;
+    return { x: dstX, y: dstY + (dstH - h) * 0.5, w, h };
+}
+
 function getDrawRect(node) {
     const inputRows = Array.isArray(node.inputs) ? node.inputs.length : 0;
     const top = TITLE_HEIGHT + inputRows * SLOT_ROW_HEIGHT + PAD_Y;
@@ -81,6 +100,22 @@ function getDrawRect(node) {
     const w = Math.max(10, node.size[0] - PAD_X * 2);
     const h = Math.max(80, node.size[1] - top - PAD_Y);
     return { x, y, w, h };
+}
+
+function getCompareHeight(node) {
+    return getDrawRect(node).h;
+}
+
+function syncDomLayout(node, state) {
+    if (!state?.dom) return;
+    const height = getCompareHeight(node);
+    state.dom.root.style.height = `${height}px`;
+    if (state.domWidget) {
+        state.domWidget.computeSize = (width) => [
+            Math.max(10, width - PAD_X * 2),
+            height,
+        ];
+    }
 }
 
 function ensureImage(ref, node) {
@@ -124,7 +159,7 @@ function createDomCompare(node, state) {
     const root = document.createElement("div");
     root.style.position = "relative";
     root.style.width = "100%";
-    root.style.height = "260px";
+    root.style.height = `${getCompareHeight(node)}px`;
     root.style.background = "rgba(20,20,20,0.85)";
     root.style.border = "1px solid rgba(255,255,255,0.15)";
     root.style.borderRadius = "8px";
@@ -192,9 +227,11 @@ function createDomCompare(node, state) {
     });
     if (domWidget) {
         domWidget.serialize = false;
+        state.domWidget = domWidget;
     }
 
     state.dom = { root, before, after, line, empty };
+    syncDomLayout(node, state);
     applyDomCompare(state);
 }
 
@@ -223,9 +260,10 @@ app.registerExtension({
             if (!node.__yeCompare) {
                 node.__yeCompare = createState();
             }
-            if (IS_V2_FRONTEND && !node.__yeCompare.dom) {
+            if (!node.__yeCompare.dom) {
                 createDomCompare(node, node.__yeCompare);
             }
+            syncDomLayout(node, node.__yeCompare);
         }
 
         const originalOnNodeCreated = nodeType.prototype.onNodeCreated;
@@ -239,6 +277,19 @@ app.registerExtension({
         nodeType.prototype.onConfigure = function patchedOnConfigure() {
             const result = originalOnConfigure?.apply(this, arguments);
             ensureSetup(this);
+            return result;
+        };
+
+        const originalOnResize = nodeType.prototype.onResize;
+        nodeType.prototype.onResize = function patchedOnResize(size) {
+            const result = originalOnResize?.apply(this, arguments);
+            const state = this.__yeCompare;
+            if (state) {
+                syncDomLayout(this, state);
+                if (state.useDom) {
+                    applyDomCompare(state);
+                }
+            }
             return result;
         };
 
@@ -313,7 +364,7 @@ app.registerExtension({
                 return;
             }
 
-            const fitted = fitContain(
+            const fitted = fitCover(
                 baseImg.naturalWidth,
                 baseImg.naturalHeight,
                 rect.x,
