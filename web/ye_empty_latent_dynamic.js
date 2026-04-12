@@ -1,4 +1,4 @@
-import { app } from "../../../scripts/app.js";
+import { app } from "../../scripts/app.js";
 
 const EXTENSION_NAME = "yet_essential.empty_latent_dynamic_widgets";
 const TARGET_NODE_NAME = "YEEmptyLatentImage";

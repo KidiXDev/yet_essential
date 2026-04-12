@@ -1,5 +1,5 @@
-import { app } from "../../../scripts/app.js";
-import { $el } from "../../../scripts/ui.js";
+import { app } from "../../scripts/app.js";
+import { $el } from "../../scripts/ui.js";
 
 const Z_INDEX = 2147483647;
 const LAST_POINTER_TTL_MS = 1500;

@@ -1,6 +1,6 @@
-import { api } from "../../../scripts/api.js";
-import { app } from "../../../scripts/app.js";
-import { ComfyWidgets } from "../../../scripts/widgets.js";
+import { api } from "../../scripts/api.js";
+import { app } from "../../scripts/app.js";
+import { ComfyWidgets } from "../../scripts/widgets.js";
 
 const EXTENSION_NAME = "yet_essential.prompt_autocomplete";
 const TARGET_NODE_NAME = "YEPrompt";
@@ -77,7 +77,8 @@ function normalizeQuery(value) {
 }
 
 function formatCount(num) {
-    if (num >= 1000000) return (num / 1000000).toFixed(1).replace(/\.0$/, "") + "m";
+    if (num >= 1000000)
+        return (num / 1000000).toFixed(1).replace(/\.0$/, "") + "m";
     if (num >= 1000) return (num / 1000).toFixed(1).replace(/\.0$/, "") + "k";
     return num.toString();
 }
@@ -1034,7 +1035,9 @@ function patchNodeWidgetFactories() {
 
 async function getTagFiles() {
     try {
-        const response = await api.fetchApi("/yet_essential/tags/list", { cache: "no-store" });
+        const response = await api.fetchApi("/yet_essential/tags/list", {
+            cache: "no-store",
+        });
         if (response.ok) {
             return await response.json();
         }
@@ -1169,21 +1172,31 @@ async function getTagFiles() {
 
             // Sync settings from server
             try {
-                const response = await api.fetchApi("/yet_essential/settings/get", {
-                    cache: "no-store",
-                });
+                const response = await api.fetchApi(
+                    "/yet_essential/settings/get",
+                    {
+                        cache: "no-store",
+                    },
+                );
                 if (response.ok) {
                     const settings = await response.json();
                     for (const [key, value] of Object.entries(settings)) {
                         const settingId = `yet_essential.${key}`;
-                        const currentValue = app.extensionManager.setting.get(settingId);
+                        const currentValue =
+                            app.extensionManager.setting.get(settingId);
                         if (currentValue !== value) {
-                            await app.extensionManager.setting.set(settingId, value);
+                            await app.extensionManager.setting.set(
+                                settingId,
+                                value,
+                            );
                         }
                     }
                 }
             } catch (error) {
-                console.error(`[${EXTENSION_NAME}] failed to sync settings`, error);
+                console.error(
+                    `[${EXTENSION_NAME}] failed to sync settings`,
+                    error,
+                );
             }
         },
         nodeCreated(node) {
