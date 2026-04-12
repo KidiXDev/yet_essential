@@ -2,6 +2,13 @@ import { app } from "../../scripts/app.js";
 import { $el } from "../../scripts/ui.js";
 
 const Z_INDEX = 2147483647;
+const LAST_POINTER_TTL_MS = 1500;
+const TARGET_NODE_TYPES = new Set([
+    "YELoadCheckpoint",
+    "YELoadDiffusionModel",
+    "YELoadLora",
+    "YELoadLoraModel",
+]);
 
 const STYLES = `
 .ye-dialog-overlay {
@@ -101,7 +108,7 @@ const STYLES = `
 }
 
 .ye-dialog-card {
-    height: 200px;
+    height: 300px;
     background-color: #080808;
     border: 1px solid #222;
     border-radius: 10px;
@@ -153,21 +160,26 @@ class YESelectionDialog {
         if (document.querySelector(".ye-dialog-overlay")) return null;
 
         this.title = title;
-        this.values = values.filter(v => v && v !== "None");
+        this.values = values.filter((v) => v && v !== "None");
         this.folderType = folderType;
         this.onSelect = onSelect;
         this.filterText = "";
-        
+
         this.el = this.render();
         document.body.appendChild(this.el);
         this.filterInput.focus();
-        
+
         this.onKeyDown = (e) => {
-             if (e.key === "Escape") this.close();
-             if (e.key === "Enter") {
-                const filtered = this.values.filter(v => v.toLowerCase().includes(this.filterText));
-                if (filtered.length > 0) { this.onSelect(filtered[0]); this.close(); }
-             }
+            if (e.key === "Escape") this.close();
+            if (e.key === "Enter") {
+                const filtered = this.values.filter((v) =>
+                    v.toLowerCase().includes(this.filterText),
+                );
+                if (filtered.length > 0) {
+                    this.onSelect(filtered[0]);
+                    this.close();
+                }
+            }
         };
         window.addEventListener("keydown", this.onKeyDown, true);
     }
@@ -184,21 +196,31 @@ class YESelectionDialog {
             oninput: (e) => {
                 this.filterText = e.target.value.toLowerCase();
                 this.updateGrid();
-            }
+            },
         });
 
-        const overlay = $el("div.ye-dialog-overlay", {
-            onclick: (e) => { if (e.target === overlay) this.close(); }
-        }, [
-            $el("div.ye-dialog-content", [
-                $el("div.ye-dialog-header", [
-                    $el("h2.ye-dialog-title", [this.title]),
-                    $el("button.ye-close-button", { onclick: () => this.close() }, ["×"])
+        const overlay = $el(
+            "div.ye-dialog-overlay",
+            {
+                onclick: (e) => {
+                    if (e.target === overlay) this.close();
+                },
+            },
+            [
+                $el("div.ye-dialog-content", [
+                    $el("div.ye-dialog-header", [
+                        $el("h2.ye-dialog-title", [this.title]),
+                        $el(
+                            "button.ye-close-button",
+                            { onclick: () => this.close() },
+                            ["×"],
+                        ),
+                    ]),
+                    $el("div.ye-filter-container", [this.filterInput]),
+                    this.grid,
                 ]),
-                $el("div.ye-filter-container", [this.filterInput]),
-                this.grid
-            ])
-        ]);
+            ],
+        );
 
         this.updateGrid();
         return overlay;
@@ -206,36 +228,55 @@ class YESelectionDialog {
 
     updateGrid() {
         this.grid.innerHTML = "";
-        const filtered = this.values.filter(v => v.toLowerCase().includes(this.filterText));
-        
-        for (const val of filtered) {
-             const cleanName = val.split(/[\\\/]/).pop().replace(/\.[^/.]+$/, "");
-             const thumbUrl = `/yet_essential/model/preview?type=${encodeURIComponent(this.folderType)}&name=${encodeURIComponent(val)}&res=300`;
-             
-             // Use a safer image approach
-             const img = document.createElement("img");
-             img.className = "ye-card-img";
-             img.loading = "lazy";
-             img.src = thumbUrl;
-             img.onload = () => img.classList.add("loaded");
+        const filtered = this.values.filter((v) =>
+            v.toLowerCase().includes(this.filterText),
+        );
 
-             const card = $el("div.ye-dialog-card", {
-                onclick: () => { this.onSelect(val); this.close(); }
-             }, [
-                img,
-                $el("div.ye-dialog-label", [cleanName])
-             ]);
-             
-             this.grid.appendChild(card);
+        for (const val of filtered) {
+            const cleanName = val
+                .split(/[\\\/]/)
+                .pop()
+                .replace(/\.[^/.]+$/, "");
+            const thumbUrl = `/yet_essential/model/preview?type=${encodeURIComponent(this.folderType)}&name=${encodeURIComponent(val)}&res=300`;
+
+            // Use a safer image approach
+            const img = document.createElement("img");
+            img.className = "ye-card-img";
+            img.loading = "lazy";
+            img.src = thumbUrl;
+            img.onload = () => img.classList.add("loaded");
+
+            const card = $el(
+                "div.ye-dialog-card",
+                {
+                    onclick: () => {
+                        this.onSelect(val);
+                        this.close();
+                    },
+                },
+                [img, $el("div.ye-dialog-label", [cleanName])],
+            );
+
+            this.grid.appendChild(card);
         }
     }
 }
 
-const MODEL_EXTENSIONS = [".safetensors", ".ckpt", ".pt", ".bin", ".gguf", ".sft"];
+const MODEL_EXTENSIONS = [
+    ".safetensors",
+    ".ckpt",
+    ".pt",
+    ".bin",
+    ".gguf",
+    ".sft",
+];
 
 class YENativeModelPreview {
     constructor() {
+        this.lastPointerNode = null;
+        this.lastPointerAt = 0;
         this.setupStyles();
+        this.setupNodeTracking();
         this.setupBridge();
     }
 
@@ -252,14 +293,21 @@ class YENativeModelPreview {
                     if (added.nodeType !== 1) continue;
                     if (added.ye_bridged) continue;
                     const style = window.getComputedStyle(added);
-                    if (style.position === "absolute" || style.position === "fixed") {
-                         if (this.isLikelyModelMenu(added)) this.bridgeToDialog(added);
+                    if (
+                        style.position === "absolute" ||
+                        style.position === "fixed"
+                    ) {
+                        if (this.isLikelyModelMenu(added))
+                            this.bridgeToDialog(added);
                     }
-                    const nested = added.querySelectorAll?.('[class*="menu"], [class*="panel"], [class*="list"]');
+                    const nested = added.querySelectorAll?.(
+                        '[class*="menu"], [class*="panel"], [class*="list"]',
+                    );
                     if (nested) {
                         for (const n of nested) {
                             if (n.ye_bridged) continue;
-                            if (this.isLikelyModelMenu(n)) this.bridgeToDialog(n);
+                            if (this.isLikelyModelMenu(n))
+                                this.bridgeToDialog(n);
                         }
                     }
                 }
@@ -268,10 +316,74 @@ class YENativeModelPreview {
         observer.observe(document.body, { childList: true, subtree: true });
     }
 
+    setupNodeTracking() {
+        document.addEventListener(
+            "pointerdown",
+            (event) => {
+                const node = this.findNodeFromElement(event.target);
+                this.lastPointerNode = node;
+                this.lastPointerAt = Date.now();
+            },
+            true,
+        );
+    }
+
+    findNodeIdFromElement(el) {
+        let current = el;
+        while (current) {
+            if (current.dataset?.nodeId) {
+                return current.dataset.nodeId;
+            }
+            if (typeof current.getAttribute === "function") {
+                const attrId = current.getAttribute("data-node-id");
+                if (attrId) return attrId;
+            }
+
+            if (current.parentNode) {
+                current = current.parentNode;
+            } else if (current instanceof ShadowRoot) {
+                current = current.host;
+            } else {
+                break;
+            }
+        }
+        return null;
+    }
+
+    findNodeFromElement(el) {
+        const nodeId = this.findNodeIdFromElement(el);
+        if (!nodeId) return null;
+        return app?.graph?.getNodeById?.(nodeId) || null;
+    }
+
+    resolvePreferredNode() {
+        const now = Date.now();
+        if (
+            this.lastPointerNode &&
+            now - this.lastPointerAt <= LAST_POINTER_TTL_MS &&
+            this.isYetEssentialNode(this.lastPointerNode)
+        ) {
+            return this.lastPointerNode;
+        }
+
+        const hovered = app?.canvas?.node_over;
+        if (this.isYetEssentialNode(hovered)) {
+            return hovered;
+        }
+
+        const selected = Object.values(app?.canvas?.selected_nodes || {});
+        if (selected.length === 1 && this.isYetEssentialNode(selected[0])) {
+            return selected[0];
+        }
+
+        return null;
+    }
+
     isLikelyModelMenu(el) {
         if (!el || !el.innerText || el.ye_bridged) return false;
         const style = window.getComputedStyle(el);
-        if (style.position !== "absolute" && style.position !== "fixed") return false;
+        if (style.position !== "absolute" && style.position !== "fixed")
+            return false;
         const txt = el.innerText.toLowerCase();
         let count = 0;
         for (const ext of MODEL_EXTENSIONS) {
@@ -285,38 +397,57 @@ class YENativeModelPreview {
         menu.ye_bridged = true;
         const itemSelector = '[class*="item"], [class*="entry"], li';
         const items = Array.from(menu.querySelectorAll(itemSelector))
-                           .map(i => i.innerText.trim())
-                           .filter(t => t && t !== "Cancel" && t !== "Filter");
+            .map((i) => i.innerText.trim())
+            .filter((t) => t && t !== "Cancel" && t !== "Filter");
         if (items.length < 2) return;
-
-        menu.style.display = "none";
-        menu.style.visibility = "hidden";
-        menu.style.opacity = "0";
 
         const target = this.findTargetByValues(items);
         if (!target) return;
         const { node, widget } = target;
         const folderType = this.getFolderType(node, widget);
 
-        new YESelectionDialog(`Select ${folderType.replace('_', ' ')}`, items, folderType, (selected) => {
-            widget.value = selected;
-            if (widget.callback) widget.callback(selected);
-            app.canvas.setDirty(true, true);
-        });
+        menu.style.display = "none";
+        menu.style.visibility = "hidden";
+        menu.style.opacity = "0";
+
+        new YESelectionDialog(
+            `Select ${folderType.replace("_", " ")}`,
+            items,
+            folderType,
+            (selected) => {
+                widget.value = selected;
+                if (widget.callback) widget.callback(selected);
+                app.canvas.setDirty(true, true);
+            },
+        );
+    }
+
+    isYetEssentialNode(node) {
+        const nodeType = String(node?.comfyClass || node?.type || "").trim();
+        return TARGET_NODE_TYPES.has(nodeType);
     }
 
     findTargetByValues(items) {
-        if (!app.graph || !app.graph._nodes) return null;
-        const sample = items.slice(0, 5); 
-        for (const node of app.graph._nodes) {
-            if (!node.widgets) continue;
-            for (const w of node.widgets) {
-                if (w.type === "combo" && w.options && Array.isArray(w.options.values)) {
-                    const values = w.options.values;
-                    const matchCount = sample.filter(s => values.includes(s)).length;
-                    if (matchCount >= 3 || (sample.length > 0 && matchCount === sample.length)) {
-                        return { node, widget: w };
-                    }
+        const node = this.resolvePreferredNode();
+        if (!node) return null;
+
+        const sample = items.slice(0, 5);
+        if (!node.widgets) return null;
+        for (const w of node.widgets) {
+            if (
+                w.type === "combo" &&
+                w.options &&
+                Array.isArray(w.options.values)
+            ) {
+                const values = w.options.values;
+                const matchCount = sample.filter((s) =>
+                    values.includes(s),
+                ).length;
+                if (
+                    matchCount >= 3 ||
+                    (sample.length > 0 && matchCount === sample.length)
+                ) {
+                    return { node, widget: w };
                 }
             }
         }
@@ -327,11 +458,13 @@ class YENativeModelPreview {
         const wn = widget.name.toLowerCase();
         if (wn.includes("ckpt")) return "checkpoints";
         if (wn.includes("lora")) return "loras";
-        if (wn.includes("unet") || wn.includes("diffusion")) return "diffusion_models";
+        if (wn.includes("unet") || wn.includes("diffusion"))
+            return "diffusion_models";
         const nt = (node.comfyClass || node.type || "").toLowerCase();
         if (nt.includes("checkpoint")) return "checkpoints";
         if (nt.includes("lora")) return "loras";
-        if (nt.includes("unet") || nt.includes("diffusion")) return "diffusion_models";
+        if (nt.includes("unet") || nt.includes("diffusion"))
+            return "diffusion_models";
         return "checkpoints";
     }
 }
