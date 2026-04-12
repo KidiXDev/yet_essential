@@ -24,11 +24,12 @@ class Settings:
         self.spacing_mode = "space"
         self.escape_parentheses = True
         self.show_post_count = False
-        self.csv_file = "booru.csv"
+        self.csv_file = ""
         self._load()
 
     def _load(self) -> None:
         if not self.path.exists():
+            self.save()
             return
 
         try:
