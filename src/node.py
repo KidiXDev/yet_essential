@@ -1,7 +1,4 @@
 from __future__ import annotations
-
-import os
-import threading
 from typing import Any
 
 import comfy.model_management as model_management
@@ -12,73 +9,9 @@ import comfy.utils
 import folder_paths
 import latent_preview
 import torch
-from aiohttp import web
-from server import PromptServer
 from spandrel import ImageModelDescriptor, ModelLoader
 
-from .core import BASE_DIR, SETTINGS_PATH, Settings, TagAutocompleteIndex, slerp_noise, MODEL_PREVIEW_MANAGER
-
-SETTINGS = Settings(SETTINGS_PATH)
-TAG_INDEX = TagAutocompleteIndex(BASE_DIR / "config" / "tag" / SETTINGS.csv_file)
-
-
-@PromptServer.instance.routes.get("/yet_essential/autocomplete/search")
-async def search_autocomplete(request: web.Request) -> web.Response:
-    query = request.query.get("q", "")
-    try:
-        requested_limit = int(request.query.get("limit", str(SETTINGS.limit)))
-    except ValueError:
-        requested_limit = SETTINGS.limit
-
-    limit = min(requested_limit, SETTINGS.limit)
-    return web.json_response(
-        {
-            "query": query,
-            "settings": {
-                "show_category_id": SETTINGS.show_category_id,
-                "show_post_count": SETTINGS.show_post_count,
-                "spacing_mode": SETTINGS.spacing_mode,
-                "insertion_suffix": SETTINGS.insertion_suffix,
-                "escape_parentheses": SETTINGS.escape_parentheses,
-            },
-            "items": TAG_INDEX.search(
-                query=query, 
-                limit=limit, 
-                algorithm=SETTINGS.algorithm,
-                sort_mode=SETTINGS.sort_mode
-            ),
-        }
-    )
-
-
-@PromptServer.instance.routes.get("/yet_essential/model/preview")
-async def get_model_preview(request: web.Request) -> web.Response:
-    folder_type = request.query.get("type", "")
-    model_name = request.query.get("name", "")
-    res = request.query.get("res", None)
-    try:
-        if res: res = int(res)
-    except ValueError:
-        res = None
-    
-    if not folder_type or not model_name:
-        return web.Response(status=400)
-        
-    preview_path = MODEL_PREVIEW_MANAGER.find_preview(folder_type, model_name, res=res)
-    if not preview_path or not os.path.exists(preview_path):
-        return web.Response(status=404)
-        
-    return web.FileResponse(preview_path)
-
-
-@PromptServer.instance.routes.get("/yet_essential/model/list")
-async def get_model_list(request: web.Request) -> web.Response:
-    folder_type = request.query.get("type", "")
-    if not folder_type:
-        return web.Response(status=400)
-    
-    models = MODEL_PREVIEW_MANAGER.list_models_with_previews(folder_type)
-    return web.json_response(models)
+from .core import BASE_DIR, SETTINGS_PATH, Settings, TagAutocompleteIndex, slerp_noise, MODEL_PREVIEW_MANAGER, SETTINGS, TAG_INDEX
 
 
 class YEPrompt:

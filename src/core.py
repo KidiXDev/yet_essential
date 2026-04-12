@@ -23,7 +23,6 @@ class Settings:
         self.insertion_suffix = ", "
         self.spacing_mode = "space"
         self.escape_parentheses = True
-        self.show_category_id = False
         self.show_post_count = False
         self.csv_file = "booru.csv"
         self._load()
@@ -59,14 +58,59 @@ class Settings:
                         self.spacing_mode = value.lower()
                     elif key == "escape_parentheses":
                         self.escape_parentheses = value.lower() == "true"
-                    elif key == "show_category_id":
-                        self.show_category_id = value.lower() == "true"
                     elif key == "show_post_count":
                         self.show_post_count = value.lower() == "true"
                     elif key == "csv_file":
                         self.csv_file = value
         except Exception as e:
             print(f"[yet_essential] Failed to load settings: {e}")
+
+    def save(self) -> None:
+        lines = [
+            "# yet_essential.prompt_autocomplete settings",
+            "",
+            "# [Search]",
+            f"search_algorithm={self.algorithm}",
+            f"csv_file={self.csv_file}",
+            f"search_limit={self.limit}",
+            f"sort_mode={self.sort_mode}",
+            "",
+            "# [Formatting]",
+            f'insertion_suffix="{self.insertion_suffix}"',
+            f"spacing_mode={self.spacing_mode}",
+            f"escape_parentheses={'true' if self.escape_parentheses else 'false'}",
+            "",
+            "# [UI]",
+            f"show_post_count={'true' if self.show_post_count else 'false'}",
+        ]
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("w", encoding="utf-8") as f:
+                f.write("\n".join(lines) + "\n")
+        except Exception as e:
+            print(f"[yet_essential] Failed to save settings: {e}")
+
+    def update(self, data: dict[str, Any]) -> None:
+        if "search_algorithm" in data:
+            self.algorithm = str(data["search_algorithm"]).lower()
+        if "csv_file" in data:
+            self.csv_file = str(data["csv_file"])
+        if "search_limit" in data:
+            try:
+                self.limit = min(200, max(1, int(data["search_limit"])))
+            except (ValueError, TypeError):
+                pass
+        if "sort_mode" in data:
+            self.sort_mode = str(data["sort_mode"]).lower()
+        if "insertion_suffix" in data:
+            self.insertion_suffix = str(data["insertion_suffix"])
+        if "spacing_mode" in data:
+            self.spacing_mode = str(data["spacing_mode"]).lower()
+        if "escape_parentheses" in data:
+            self.escape_parentheses = bool(data["escape_parentheses"])
+        if "show_post_count" in data:
+            self.show_post_count = bool(data["show_post_count"])
+        self.save()
 
 
 def _safe_int(value: str, default: int = 0) -> int:
@@ -97,6 +141,16 @@ class TagAutocompleteIndex:
         self._entries: list[TagEntry] = []
         self._prefix_buckets: dict[str, list[int]] = {}
         self._top_entry_ids: list[int] = []
+
+    def update_path(self, csv_path: Path) -> None:
+        if self.csv_path == csv_path:
+            return
+        with self._lock:
+            self.csv_path = csv_path
+            self._last_mtime_ns = -1
+            self._entries = []
+            self._prefix_buckets = {}
+            self._top_entry_ids = []
 
     def _reload_if_needed(self) -> None:
         try:
@@ -390,3 +444,5 @@ class ModelPreviewManager:
 
 
 MODEL_PREVIEW_MANAGER = ModelPreviewManager()
+SETTINGS = Settings(SETTINGS_PATH)
+TAG_INDEX = TagAutocompleteIndex(BASE_DIR / "config" / "tag" / SETTINGS.csv_file)

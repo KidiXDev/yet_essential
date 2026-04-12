@@ -76,6 +76,12 @@ function normalizeQuery(value) {
     return value.trim().toLowerCase().replaceAll(" ", "_");
 }
 
+function formatCount(num) {
+    if (num >= 1000000) return (num / 1000000).toFixed(1).replace(/\.0$/, "") + "m";
+    if (num >= 1000) return (num / 1000).toFixed(1).replace(/\.0$/, "") + "k";
+    return num.toString();
+}
+
 class PromptAutocompleteController {
     constructor(inputEl) {
         this.inputEl = inputEl;
@@ -296,7 +302,6 @@ class PromptAutocompleteController {
         };
 
         const showPostCount = !!payload?.settings?.show_post_count;
-        const showCategoryId = !!payload?.settings?.show_category_id;
 
         items.forEach((item, index) => {
             const row = document.createElement("div");
@@ -306,27 +311,22 @@ class PromptAutocompleteController {
             }
 
             const title = item.label || item.tag || item.insert_text || "";
-            const metaParts = [];
-
-            if (
-                showPostCount &&
-                Number.isFinite(item.total_post) &&
-                item.total_post > 0
-            ) {
-                metaParts.push(`${item.total_post.toLocaleString()}`);
-            }
-
             const categoryName =
                 categoryMap[item.category] ||
                 (Number.isFinite(item.category)
                     ? `Other (${item.category})`
                     : "");
-            if (categoryName) {
-                if (showCategoryId) {
-                    metaParts.push(`${categoryName} (${item.category})`);
-                } else {
-                    metaParts.push(categoryName);
-                }
+
+            let metaText = "";
+            if (
+                showPostCount &&
+                Number.isFinite(item.total_post) &&
+                item.total_post > 0
+            ) {
+                const countStr = formatCount(item.total_post);
+                metaText = `${countStr} post${categoryName ? " - " + categoryName : ""}`;
+            } else {
+                metaText = categoryName;
             }
 
             const mainEl = document.createElement("div");
@@ -335,7 +335,7 @@ class PromptAutocompleteController {
 
             const metaEl = document.createElement("div");
             metaEl.className = "ye-autocomplete-meta";
-            metaEl.textContent = metaParts.join(" | ");
+            metaEl.textContent = metaText;
 
             row.appendChild(mainEl);
             row.appendChild(metaEl);
@@ -1032,42 +1032,187 @@ function patchNodeWidgetFactories() {
     graphWidgetPatched = true;
 }
 
-ensureStyle();
+async function getTagFiles() {
+    try {
+        const response = await api.fetchApi("/yet_essential/tags/list", { cache: "no-store" });
+        if (response.ok) {
+            return await response.json();
+        }
+    } catch (error) {
+        console.error(`[${EXTENSION_NAME}] failed to fetch tag files`, error);
+    }
+    return ["booru.csv"];
+}
 
-app.registerExtension({
-    name: EXTENSION_NAME,
-    setup() {
-        installGlobalHooks();
-        patchComfyStringWidget();
-        patchComfyTextareaWidget();
-        patchNodeWidgetFactories();
-    },
-    nodeCreated(node) {
-        if (
-            node?.comfyClass === TARGET_NODE_NAME ||
-            node?.type === TARGET_NODE_NAME
-        ) {
-            scheduleAttachFromNode(node);
-        }
-    },
-    loadedGraphNode(node) {
-        if (
-            node?.comfyClass === TARGET_NODE_NAME ||
-            node?.type === TARGET_NODE_NAME
-        ) {
-            scheduleAttachFromNode(node);
-        }
-    },
-    async beforeRegisterNodeDef(nodeType, nodeData) {
-        if (nodeData.name !== TARGET_NODE_NAME) {
-            return;
-        }
+(async () => {
+    const tagFiles = await getTagFiles();
 
-        const originalOnNodeCreated = nodeType.prototype.onNodeCreated;
-        nodeType.prototype.onNodeCreated = function () {
-            const result = originalOnNodeCreated?.apply(this, arguments);
-            scheduleAttachFromNode(this);
-            return result;
-        };
-    },
-});
+    app.registerExtension({
+        name: EXTENSION_NAME,
+        settings: [
+            {
+                id: "yet_essential.search_algorithm",
+                name: "Search Algorithm",
+                type: "combo",
+                defaultValue: "fuzzy",
+                options: ["fuzzy", "contains", "prefix"],
+                category: ["Yet Essential", "Search", "Algorithm"],
+                onChange: (newVal) => {
+                    api.fetchApi("/yet_essential/settings/update", {
+                        method: "POST",
+                        body: JSON.stringify({ search_algorithm: newVal }),
+                    });
+                },
+            },
+            {
+                id: "yet_essential.csv_file",
+                name: "CSV File",
+                type: "combo",
+                defaultValue: "booru.csv",
+                options: tagFiles,
+                category: ["Yet Essential", "Search", "Source File"],
+                onChange: (newVal) => {
+                    api.fetchApi("/yet_essential/settings/update", {
+                        method: "POST",
+                        body: JSON.stringify({ csv_file: newVal }),
+                    });
+                },
+            },
+            {
+                id: "yet_essential.search_limit",
+                name: "Search Limit",
+                type: "number",
+                defaultValue: 20,
+                attrs: { min: 1, max: 200 },
+                category: ["Yet Essential", "Search", "Limit"],
+                onChange: (newVal) => {
+                    api.fetchApi("/yet_essential/settings/update", {
+                        method: "POST",
+                        body: JSON.stringify({ search_limit: newVal }),
+                    });
+                },
+            },
+            {
+                id: "yet_essential.sort_mode",
+                name: "Sort Mode",
+                type: "combo",
+                defaultValue: "score",
+                options: ["score", "alphabet", "count"],
+                category: ["Yet Essential", "Search", "Sort Priority"],
+                onChange: (newVal) => {
+                    api.fetchApi("/yet_essential/settings/update", {
+                        method: "POST",
+                        body: JSON.stringify({ sort_mode: newVal }),
+                    });
+                },
+            },
+            {
+                id: "yet_essential.insertion_suffix",
+                name: "Insertion Suffix",
+                type: "text",
+                defaultValue: ", ",
+                category: ["Yet Essential", "Formatting", "Suffix"],
+                onChange: (newVal) => {
+                    api.fetchApi("/yet_essential/settings/update", {
+                        method: "POST",
+                        body: JSON.stringify({ insertion_suffix: newVal }),
+                    });
+                },
+            },
+            {
+                id: "yet_essential.spacing_mode",
+                name: "Spacing Mode",
+                type: "combo",
+                defaultValue: "space",
+                options: ["space", "underscore"],
+                category: ["Yet Essential", "Formatting", "Space Conversion"],
+                onChange: (newVal) => {
+                    api.fetchApi("/yet_essential/settings/update", {
+                        method: "POST",
+                        body: JSON.stringify({ spacing_mode: newVal }),
+                    });
+                },
+            },
+            {
+                id: "yet_essential.escape_parentheses",
+                name: "Escape Parentheses",
+                type: "boolean",
+                defaultValue: true,
+                category: ["Yet Essential", "Formatting", "Clean Escape"],
+                onChange: (newVal) => {
+                    api.fetchApi("/yet_essential/settings/update", {
+                        method: "POST",
+                        body: JSON.stringify({ escape_parentheses: !!newVal }),
+                    });
+                },
+            },
+            {
+                id: "yet_essential.show_post_count",
+                name: "Show Post Count",
+                type: "boolean",
+                defaultValue: false,
+                category: ["Yet Essential", "UI", "Count Visibility"],
+                onChange: (newVal) => {
+                    api.fetchApi("/yet_essential/settings/update", {
+                        method: "POST",
+                        body: JSON.stringify({ show_post_count: !!newVal }),
+                    });
+                },
+            },
+        ],
+        async setup() {
+            ensureStyle();
+            installGlobalHooks();
+            patchComfyStringWidget();
+            patchComfyTextareaWidget();
+            patchNodeWidgetFactories();
+
+            // Sync settings from server
+            try {
+                const response = await api.fetchApi("/yet_essential/settings/get", {
+                    cache: "no-store",
+                });
+                if (response.ok) {
+                    const settings = await response.json();
+                    for (const [key, value] of Object.entries(settings)) {
+                        const settingId = `yet_essential.${key}`;
+                        const currentValue = app.extensionManager.setting.get(settingId);
+                        if (currentValue !== value) {
+                            await app.extensionManager.setting.set(settingId, value);
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error(`[${EXTENSION_NAME}] failed to sync settings`, error);
+            }
+        },
+        nodeCreated(node) {
+            if (
+                node?.comfyClass === TARGET_NODE_NAME ||
+                node?.type === TARGET_NODE_NAME
+            ) {
+                scheduleAttachFromNode(node);
+            }
+        },
+        loadedGraphNode(node) {
+            if (
+                node?.comfyClass === TARGET_NODE_NAME ||
+                node?.type === TARGET_NODE_NAME
+            ) {
+                scheduleAttachFromNode(node);
+            }
+        },
+        async beforeRegisterNodeDef(nodeType, nodeData) {
+            if (nodeData.name !== TARGET_NODE_NAME) {
+                return;
+            }
+
+            const originalOnNodeCreated = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function () {
+                const result = originalOnNodeCreated?.apply(this, arguments);
+                scheduleAttachFromNode(this);
+                return result;
+            };
+        },
+    });
+})();
