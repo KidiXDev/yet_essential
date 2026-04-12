@@ -1,6 +1,7 @@
 from __future__ import annotations
 import os
 import uuid
+import re
 from typing import Any
 
 import comfy.model_management as model_management
@@ -60,22 +61,29 @@ class YEClipTextEncodePrompt:
                         "default": "",
                     },
                 ),
+                "format_prompt": ("BOOLEAN", {"default": True}),
             }
         }
 
-    RETURN_TYPES = ("CONDITIONING",)
-    RETURN_NAMES = ("conditioning",)
+    RETURN_TYPES = ("CONDITIONING", "STRING")
+    RETURN_NAMES = ("conditioning", "formatted_prompt")
     FUNCTION = "encode"
     CATEGORY = "yet_essential/prompt"
 
-    def encode(self, clip, prompt):
+    def encode(self, clip, prompt, format_prompt):
         if clip is None:
             raise RuntimeError(
                 "YEClipTextEncodePrompt: clip input is invalid (None). "
                 "Ensure your checkpoint/model loader outputs a valid CLIP."
             )
+
+        if format_prompt:
+            # Remove extra whitespace after comma and trim
+            prompt = ", ".join([p.strip() for p in prompt.split(",") if p.strip()])
+            prompt = prompt.strip()
+
         tokens = clip.tokenize(prompt)
-        return (clip.encode_from_tokens_scheduled(tokens),)
+        return (clip.encode_from_tokens_scheduled(tokens), prompt)
 
 
 class YEImageUpscale:
