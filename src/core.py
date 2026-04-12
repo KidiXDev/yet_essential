@@ -8,9 +8,9 @@ from typing import Any
 
 import torch
 import folder_paths
+from PIL import Image, ImageOps
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-AUTOCOMPLETE_CSV_PATH = BASE_DIR / "config" / "autocomplete.csv"
 SETTINGS_PATH = BASE_DIR / "config" / "setting.cfg"
 
 
@@ -25,6 +25,7 @@ class Settings:
         self.escape_parentheses = True
         self.show_category_id = False
         self.show_post_count = False
+        self.csv_file = "booru.csv"
         self._load()
 
     def _load(self) -> None:
@@ -41,27 +42,29 @@ class Settings:
                         continue
                     key, value = line.split("=", 1)
                     key = key.strip().lower()
-                    value = value.strip().lower()
+                    value = value.strip()
 
                     if key == "search_algorithm":
-                        self.algorithm = value
+                        self.algorithm = value.lower()
                     elif key == "search_limit":
                         try:
                             self.limit = min(200, max(1, int(value)))
                         except ValueError:
                             pass
                     elif key == "sort_mode":
-                        self.sort_mode = value
+                        self.sort_mode = value.lower()
                     elif key == "insertion_suffix":
                         self.insertion_suffix = value.replace('"', '').replace("'", "")
                     elif key == "spacing_mode":
-                        self.spacing_mode = value
+                        self.spacing_mode = value.lower()
                     elif key == "escape_parentheses":
-                        self.escape_parentheses = value == "true"
+                        self.escape_parentheses = value.lower() == "true"
                     elif key == "show_category_id":
-                        self.show_category_id = value == "true"
+                        self.show_category_id = value.lower() == "true"
                     elif key == "show_post_count":
-                        self.show_post_count = value == "true"
+                        self.show_post_count = value.lower() == "true"
+                    elif key == "csv_file":
+                        self.csv_file = value
         except Exception as e:
             print(f"[yet_essential] Failed to load settings: {e}")
 
@@ -297,17 +300,51 @@ class ModelPreviewManager:
         self._cache: dict[str, str | None] = {}
         self._lock = threading.Lock()
         self._supported_exts = [".png", ".jpg", ".jpeg", ".webp"]
+        self._thumb_dir = BASE_DIR / "cache" / "thumbnails"
+        self._thumb_dir.mkdir(parents=True, exist_ok=True)
 
-    def find_preview(self, folder_type: str, model_name: str) -> str | None:
+    def find_preview(self, folder_type: str, model_name: str, res: int | None = None) -> str | None:
         cache_key = f"{folder_type}:{model_name}"
+        if res:
+            cache_key = f"{cache_key}:{res}"
+
         with self._lock:
             if cache_key in self._cache:
                 return self._cache[cache_key]
 
         preview_path = self._find_on_disk(folder_type, model_name)
+        if not preview_path:
+            return None
+
+        if res:
+            preview_path = self._get_thumbnail(preview_path, res)
+
         with self._lock:
             self._cache[cache_key] = preview_path
         return preview_path
+
+    def _get_thumbnail(self, path: str, size: int) -> str:
+        orig_p = Path(path)
+        # Create a stable hash or name for the thumbnail
+        # We'll use the path and mtime to ensure we update if the image changes
+        mtime = int(orig_p.stat().st_mtime)
+        safe_name = orig_p.name.replace(".", "_")
+        thumb_name = f"{safe_name}_{mtime}_{size}.webp"
+        thumb_path = self._thumb_dir / thumb_name
+
+        if thumb_path.exists():
+            return str(thumb_path)
+
+        try:
+            with Image.open(orig_p) as img:
+                # Optimized resize
+                img = ImageOps.exif_transpose(img)
+                img.thumbnail((size, size), Image.Resampling.LANCZOS)
+                img.save(thumb_path, "WEBP", quality=80)
+            return str(thumb_path)
+        except Exception as e:
+            print(f"[yet_essential] Failed to generate thumbnail: {e}")
+            return path
 
     def _find_on_disk(self, folder_type: str, model_name: str) -> str | None:
         full_path = folder_paths.get_full_path(folder_type, model_name)

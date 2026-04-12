@@ -16,10 +16,10 @@ from aiohttp import web
 from server import PromptServer
 from spandrel import ImageModelDescriptor, ModelLoader
 
-from .core import AUTOCOMPLETE_CSV_PATH, SETTINGS_PATH, Settings, TagAutocompleteIndex, slerp_noise, MODEL_PREVIEW_MANAGER
+from .core import BASE_DIR, SETTINGS_PATH, Settings, TagAutocompleteIndex, slerp_noise, MODEL_PREVIEW_MANAGER
 
-TAG_INDEX = TagAutocompleteIndex(AUTOCOMPLETE_CSV_PATH)
 SETTINGS = Settings(SETTINGS_PATH)
+TAG_INDEX = TagAutocompleteIndex(BASE_DIR / "config" / "tag" / SETTINGS.csv_file)
 
 
 @PromptServer.instance.routes.get("/yet_essential/autocomplete/search")
@@ -55,11 +55,16 @@ async def search_autocomplete(request: web.Request) -> web.Response:
 async def get_model_preview(request: web.Request) -> web.Response:
     folder_type = request.query.get("type", "")
     model_name = request.query.get("name", "")
+    res = request.query.get("res", None)
+    try:
+        if res: res = int(res)
+    except ValueError:
+        res = None
     
     if not folder_type or not model_name:
         return web.Response(status=400)
         
-    preview_path = MODEL_PREVIEW_MANAGER.find_preview(folder_type, model_name)
+    preview_path = MODEL_PREVIEW_MANAGER.find_preview(folder_type, model_name, res=res)
     if not preview_path or not os.path.exists(preview_path):
         return web.Response(status=404)
         
@@ -88,7 +93,7 @@ class YEPrompt:
                         "dynamicPrompts": True,
                         "yet_essential.autocomplete": True,
                         "default": "",
-                        "placeholder": "Type a prompt. Autocomplete comes from config/autocomplete.csv",
+                        "placeholder": f"Type a prompt. Autocomplete comes from config/tag/{SETTINGS.csv_file}",
                     },
                 )
             }
