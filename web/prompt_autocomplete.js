@@ -100,6 +100,7 @@ class PromptAutocompleteController {
         this.settings = {
             spacing_mode: "space",
             insertion_suffix: ", ",
+            smart_suffix: true,
             escape_parentheses: true,
         };
 
@@ -405,7 +406,7 @@ class PromptAutocompleteController {
                 .replaceAll(")", "\\)");
         }
 
-        const suffix =
+        let suffix =
             typeof this.settings.insertion_suffix === "string"
                 ? this.settings.insertion_suffix
                 : "";
@@ -413,6 +414,16 @@ class PromptAutocompleteController {
         const fullText = this.inputEl.value ?? "";
         const before = fullText.slice(0, tokenRange.start);
         const after = fullText.slice(tokenRange.end);
+
+        // Smart suffix: don't insert if it already exists in 'after'
+        if (this.settings.smart_suffix && suffix && after) {
+            const trimmedAfter = after.trimStart();
+            const trimmedSuffix = suffix.trim();
+            if (trimmedSuffix && trimmedAfter.startsWith(trimmedSuffix)) {
+                suffix = "";
+            }
+        }
+
         const leadingWhitespace =
             tokenRange.tokenFragment.match(/^\s*/)?.[0] ?? "";
         const replacement = `${leadingWhitespace}${insertText}${suffix}`;
@@ -1034,171 +1045,15 @@ function patchNodeWidgetFactories() {
     graphWidgetPatched = true;
 }
 
-async function getTagFiles() {
-    try {
-        const response = await api.fetchApi("/yet_essential/tags/list", {
-            cache: "no-store",
-        });
-        if (response.ok) {
-            return await response.json();
-        }
-    } catch (error) {
-        console.error(`[${EXTENSION_NAME}] failed to fetch tag files`, error);
-    }
-    return ["booru.csv"];
-}
-
 (async () => {
-    const tagFiles = await getTagFiles();
-
     app.registerExtension({
         name: EXTENSION_NAME,
-        settings: [
-            {
-                id: "yet_essential.search_algorithm",
-                name: "Search Algorithm",
-                type: "combo",
-                defaultValue: "fuzzy",
-                options: ["fuzzy", "contains", "prefix"],
-                category: ["Yet Essential", "Search", "Algorithm"],
-                onChange: (newVal) => {
-                    api.fetchApi("/yet_essential/settings/update", {
-                        method: "POST",
-                        body: JSON.stringify({ search_algorithm: newVal }),
-                    });
-                },
-            },
-            {
-                id: "yet_essential.csv_file",
-                name: "CSV File",
-                type: "combo",
-                defaultValue: "booru.csv",
-                options: tagFiles,
-                category: ["Yet Essential", "Search", "Source File"],
-                onChange: (newVal) => {
-                    api.fetchApi("/yet_essential/settings/update", {
-                        method: "POST",
-                        body: JSON.stringify({ csv_file: newVal }),
-                    });
-                },
-            },
-            {
-                id: "yet_essential.search_limit",
-                name: "Search Limit",
-                type: "number",
-                defaultValue: 20,
-                attrs: { min: 1, max: 200 },
-                category: ["Yet Essential", "Search", "Limit"],
-                onChange: (newVal) => {
-                    api.fetchApi("/yet_essential/settings/update", {
-                        method: "POST",
-                        body: JSON.stringify({ search_limit: newVal }),
-                    });
-                },
-            },
-            {
-                id: "yet_essential.sort_mode",
-                name: "Sort Mode",
-                type: "combo",
-                defaultValue: "score",
-                options: ["score", "alphabet", "count"],
-                category: ["Yet Essential", "Search", "Sort Priority"],
-                onChange: (newVal) => {
-                    api.fetchApi("/yet_essential/settings/update", {
-                        method: "POST",
-                        body: JSON.stringify({ sort_mode: newVal }),
-                    });
-                },
-            },
-            {
-                id: "yet_essential.insertion_suffix",
-                name: "Insertion Suffix",
-                type: "text",
-                defaultValue: ", ",
-                category: ["Yet Essential", "Formatting", "Suffix"],
-                onChange: (newVal) => {
-                    api.fetchApi("/yet_essential/settings/update", {
-                        method: "POST",
-                        body: JSON.stringify({ insertion_suffix: newVal }),
-                    });
-                },
-            },
-            {
-                id: "yet_essential.spacing_mode",
-                name: "Spacing Mode",
-                type: "combo",
-                defaultValue: "space",
-                options: ["space", "underscore"],
-                category: ["Yet Essential", "Formatting", "Space Conversion"],
-                onChange: (newVal) => {
-                    api.fetchApi("/yet_essential/settings/update", {
-                        method: "POST",
-                        body: JSON.stringify({ spacing_mode: newVal }),
-                    });
-                },
-            },
-            {
-                id: "yet_essential.escape_parentheses",
-                name: "Escape Parentheses",
-                type: "boolean",
-                defaultValue: true,
-                category: ["Yet Essential", "Formatting", "Clean Escape"],
-                onChange: (newVal) => {
-                    api.fetchApi("/yet_essential/settings/update", {
-                        method: "POST",
-                        body: JSON.stringify({ escape_parentheses: !!newVal }),
-                    });
-                },
-            },
-            {
-                id: "yet_essential.show_post_count",
-                name: "Show Post Count",
-                type: "boolean",
-                defaultValue: false,
-                category: ["Yet Essential", "UI", "Count Visibility"],
-                onChange: (newVal) => {
-                    api.fetchApi("/yet_essential/settings/update", {
-                        method: "POST",
-                        body: JSON.stringify({ show_post_count: !!newVal }),
-                    });
-                },
-            },
-        ],
         async setup() {
             ensureStyle();
             installGlobalHooks();
             patchComfyStringWidget();
             patchComfyTextareaWidget();
             patchNodeWidgetFactories();
-
-            // Sync settings from server
-            try {
-                const response = await api.fetchApi(
-                    "/yet_essential/settings/get",
-                    {
-                        cache: "no-store",
-                    },
-                );
-                if (response.ok) {
-                    const settings = await response.json();
-                    for (const [key, value] of Object.entries(settings)) {
-                        const settingId = `yet_essential.${key}`;
-                        const currentValue =
-                            app.extensionManager.setting.get(settingId);
-                        if (currentValue !== value) {
-                            await app.extensionManager.setting.set(
-                                settingId,
-                                value,
-                            );
-                        }
-                    }
-                }
-            } catch (error) {
-                console.error(
-                    `[${EXTENSION_NAME}] failed to sync settings`,
-                    error,
-                );
-            }
         },
         nodeCreated(node) {
             if (isTargetNode(node)) {

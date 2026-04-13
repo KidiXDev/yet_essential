@@ -21,6 +21,7 @@ class Settings:
         self.limit = 20
         self.sort_mode = "score"
         self.insertion_suffix = ", "
+        self.smart_suffix = True
         self.spacing_mode = "space"
         self.escape_parentheses = True
         self.show_post_count = False
@@ -61,6 +62,8 @@ class Settings:
                         self.escape_parentheses = value.lower() == "true"
                     elif key == "show_post_count":
                         self.show_post_count = value.lower() == "true"
+                    elif key == "smart_suffix":
+                        self.smart_suffix = value.lower() == "true"
                     elif key == "csv_file":
                         self.csv_file = value
         except Exception as e:
@@ -80,6 +83,7 @@ class Settings:
             f'insertion_suffix="{self.insertion_suffix}"',
             f"spacing_mode={self.spacing_mode}",
             f"escape_parentheses={'true' if self.escape_parentheses else 'false'}",
+            f"smart_suffix={'true' if self.smart_suffix else 'false'}",
             "",
             "# [UI]",
             f"show_post_count={'true' if self.show_post_count else 'false'}",
@@ -111,6 +115,8 @@ class Settings:
             self.escape_parentheses = bool(data["escape_parentheses"])
         if "show_post_count" in data:
             self.show_post_count = bool(data["show_post_count"])
+        if "smart_suffix" in data:
+            self.smart_suffix = bool(data["smart_suffix"])
         self.save()
 
 

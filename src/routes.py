@@ -19,6 +19,7 @@ async def search_autocomplete(request: web.Request) -> web.Response:
                 "show_post_count": SETTINGS.show_post_count,
                 "spacing_mode": SETTINGS.spacing_mode,
                 "insertion_suffix": SETTINGS.insertion_suffix,
+                "smart_suffix": SETTINGS.smart_suffix,
                 "escape_parentheses": SETTINGS.escape_parentheses,
             },
             "items": TAG_INDEX.search(
@@ -87,6 +88,7 @@ async def get_settings(request: web.Request) -> web.Response:
         "spacing_mode": SETTINGS.spacing_mode,
         "escape_parentheses": SETTINGS.escape_parentheses,
         "show_post_count": SETTINGS.show_post_count,
+        "smart_suffix": SETTINGS.smart_suffix,
         "csv_file": SETTINGS.csv_file,
     })
 
