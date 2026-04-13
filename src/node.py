@@ -1,7 +1,7 @@
 from __future__ import annotations
+
 import os
 import uuid
-import re
 from typing import Any
 
 import comfy.model_management as model_management
@@ -17,60 +17,60 @@ import torch.nn.functional as F
 from PIL import Image
 from spandrel import ImageModelDescriptor, ModelLoader
 
-from .core import BASE_DIR, SETTINGS_PATH, Settings, TagAutocompleteIndex, slerp_noise, MODEL_PREVIEW_MANAGER, SETTINGS, TAG_INDEX
+from comfy_api.latest import ComfyExtension, io
+
+from .core import slerp_noise
 
 
-class YEPrompt:
+YEPostFXPipe = io.Custom("YE_POSTFX_PIPE")
+
+
+def _prompt_input() -> io.String.Input:
+    return io.String.Input(
+        "prompt",
+        multiline=True,
+        dynamic_prompts=True,
+        default="",
+        extra_dict={"yet_essential.autocomplete": True},
+    )
+
+
+class YEPrompt(io.ComfyNode):
     @classmethod
-    def INPUT_TYPES(cls) -> dict[str, dict[str, tuple[str, dict[str, Any]]]]:
-        return {
-            "required": {
-                "prompt": (
-                    "STRING",
-                    {
-                        "multiline": True,
-                        "dynamicPrompts": True,
-                        "yet_essential.autocomplete": True,
-                        "default": "",
-                    },
-                )
-            }
-        }
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="YEPrompt",
+            display_name="YE Prompt",
+            category="yet_essential/prompt",
+            inputs=[_prompt_input()],
+            outputs=[io.String.Output(display_name="prompt")],
+        )
 
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("prompt",)
-    FUNCTION = "output_prompt"
-    CATEGORY = "yet_essential/prompt"
-
-    def output_prompt(self, prompt: str) -> tuple[str]:
-        return (prompt,)
-
-
-class YEClipTextEncodePrompt:
     @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "clip": ("CLIP",),
-                "prompt": (
-                    "STRING",
-                    {
-                        "multiline": True,
-                        "dynamicPrompts": True,
-                        "yet_essential.autocomplete": True,
-                        "default": "",
-                    },
-                ),
-                "format_prompt": ("BOOLEAN", {"default": True}),
-            }
-        }
+    def execute(cls, prompt: str) -> io.NodeOutput:
+        return io.NodeOutput(prompt)
 
-    RETURN_TYPES = ("CONDITIONING", "STRING")
-    RETURN_NAMES = ("conditioning", "formatted_prompt")
-    FUNCTION = "encode"
-    CATEGORY = "yet_essential/prompt"
 
-    def encode(self, clip, prompt, format_prompt):
+class YEClipTextEncodePrompt(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="YEClipTextEncodePrompt",
+            display_name="YE Clip Text Encode (Prompt)",
+            category="yet_essential/prompt",
+            inputs=[
+                io.Clip.Input("clip"),
+                _prompt_input(),
+                io.Boolean.Input("format_prompt", default=True),
+            ],
+            outputs=[
+                io.Conditioning.Output(display_name="conditioning"),
+                io.String.Output(display_name="formatted_prompt"),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, clip, prompt: str, format_prompt: bool) -> io.NodeOutput:
         if clip is None:
             raise RuntimeError(
                 "YEClipTextEncodePrompt: clip input is invalid (None). "
@@ -78,31 +78,30 @@ class YEClipTextEncodePrompt:
             )
 
         if format_prompt:
-            # Remove extra whitespace after comma and trim
-            prompt = ", ".join([p.strip() for p in prompt.split(",") if p.strip()])
-            prompt = prompt.strip()
+            prompt = ", ".join([p.strip() for p in prompt.split(",") if p.strip()]).strip()
 
         tokens = clip.tokenize(prompt)
-        return (clip.encode_from_tokens_scheduled(tokens), prompt)
+        return io.NodeOutput(clip.encode_from_tokens_scheduled(tokens), prompt)
 
 
-class YEImageUpscale:
+class YEImageUpscale(io.ComfyNode):
     @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "image": ("IMAGE",),
-                "upscale_model": (folder_paths.get_filename_list("upscale_models"),),
-                "upscale_by": ("FLOAT", {"default": 2.0, "min": 0.1, "max": 10.0, "step": 0.1}),
-            }
-        }
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="YEImageUpscale",
+            display_name="YE Image Upscale",
+            category="yet_essential/image",
+            inputs=[
+                io.Image.Input("image"),
+                io.Combo.Input("upscale_model", options=folder_paths.get_filename_list("upscale_models")),
+                io.Float.Input("upscale_by", default=2.0, min=0.1, max=10.0, step=0.1),
+            ],
+            outputs=[io.Image.Output()],
+        )
 
-    RETURN_TYPES = ("IMAGE",)
-    FUNCTION = "upscale"
-    CATEGORY = "yet_essential/image"
-
-    def upscale(self, image, upscale_model, upscale_by):
-        batch_size, height, width, _ = image.shape
+    @classmethod
+    def execute(cls, image: io.Image.Type, upscale_model: str, upscale_by: float) -> io.NodeOutput:
+        _, height, width, _ = image.shape
         dest_w = max(8, int((width * upscale_by) // 8 * 8))
         dest_h = max(8, int((height * upscale_by) // 8 * 8))
 
@@ -114,7 +113,7 @@ class YEImageUpscale:
 
         upscale_model_obj = ModelLoader().load_from_state_dict(sd).eval()
         if not isinstance(upscale_model_obj, ImageModelDescriptor):
-            raise Exception("YEImageUpscale: Upscale model must be a single-image upscaler.")
+            raise RuntimeError("YEImageUpscale: Upscale model must be a single-image upscaler.")
 
         in_img = image.movedim(-1, -3).to(device)
         memory_required = model_management.module_size(upscale_model_obj.model)
@@ -124,13 +123,19 @@ class YEImageUpscale:
 
         tile = 512
         overlap = 32
-        oom = True
+        out_img = None
         try:
-            while oom:
+            while True:
                 try:
-                    steps = in_img.shape[0] * comfy.utils.get_tiled_scale_steps(width, height, tile_x=tile, tile_y=tile, overlap=overlap)
+                    steps = in_img.shape[0] * comfy.utils.get_tiled_scale_steps(
+                        width,
+                        height,
+                        tile_x=tile,
+                        tile_y=tile,
+                        overlap=overlap,
+                    )
                     pbar = comfy.utils.ProgressBar(steps)
-                    s = comfy.utils.tiled_scale(
+                    out_img = comfy.utils.tiled_scale(
                         in_img,
                         lambda a: upscale_model_obj(a),
                         tile_x=tile,
@@ -139,25 +144,25 @@ class YEImageUpscale:
                         upscale_amount=upscale_model_obj.scale,
                         pbar=pbar,
                     )
-                    oom = False
-                except Exception as e:
-                    model_management.raise_non_oom(e)
+                    break
+                except Exception as err:
+                    model_management.raise_non_oom(err)
                     tile //= 2
                     if tile < 128:
-                        raise e
+                        raise
         finally:
             upscale_model_obj.to("cpu")
 
-        s = s.movedim(-3, -1).cpu()
-        if s.shape[1] != dest_h or s.shape[2] != dest_w:
-            s = s.movedim(-1, -3)
-            s = comfy.utils.common_upscale(s, dest_w, dest_h, "lanczos", "disabled")
-            s = s.movedim(-3, -1)
+        out_img = out_img.movedim(-3, -1).cpu()
+        if out_img.shape[1] != dest_h or out_img.shape[2] != dest_w:
+            out_img = out_img.movedim(-1, -3)
+            out_img = comfy.utils.common_upscale(out_img, dest_w, dest_h, "lanczos", "disabled")
+            out_img = out_img.movedim(-3, -1)
 
-        return (torch.clamp(s, 0.0, 1.0),)
+        return io.NodeOutput(torch.clamp(out_img, 0.0, 1.0))
 
 
-class YEEmptyLatentImage:
+class YEEmptyLatentImage(io.ComfyNode):
     DIMENSION_PRESETS = {
         "Custom": (1024, 1024),
         "1024 x 1024 (1:1 Square)": (1024, 1024),
@@ -175,154 +180,154 @@ class YEEmptyLatentImage:
     }
 
     @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "preset": (list(cls.DIMENSION_PRESETS.keys()), {"default": "Custom"}),
-                "width": ("INT", {"default": 1024, "min": 16, "max": 8192, "step": 8}),
-                "height": ("INT", {"default": 1024, "min": 16, "max": 8192, "step": 8}),
-                "batch_size": ("INT", {"default": 1, "min": 1, "max": 64}),
-            }
-        }
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="YEEmptyLatentImage",
+            display_name="YE Empty Latent Image",
+            category="yet_essential/latent",
+            inputs=[
+                io.Combo.Input("preset", options=list(cls.DIMENSION_PRESETS.keys()), default="Custom"),
+                io.Int.Input("width", default=1024, min=16, max=8192, step=8),
+                io.Int.Input("height", default=1024, min=16, max=8192, step=8),
+                io.Int.Input("batch_size", default=1, min=1, max=64),
+            ],
+            outputs=[io.Latent.Output()],
+        )
 
-    RETURN_TYPES = ("LATENT",)
-    FUNCTION = "generate"
-    CATEGORY = "yet_essential/latent"
-
-    def generate(self, preset, width, height, batch_size):
+    @classmethod
+    def execute(cls, preset: str, width: int, height: int, batch_size: int) -> io.NodeOutput:
         if preset != "Custom":
-            width, height = self.DIMENSION_PRESETS[preset]
+            width, height = cls.DIMENSION_PRESETS[preset]
 
         latent = torch.zeros([batch_size, 4, height // 8, width // 8])
-        return ({"samples": latent},)
+        return io.NodeOutput({"samples": latent})
 
 
-class YESeedGenerator:
+class YESeedGenerator(io.ComfyNode):
     MAX_SEED = 0x7FFFFFFFFFFFFFFF
 
     @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "seed": ("INT", {"default": 0, "min": 0, "max": cls.MAX_SEED}),
-            }
-        }
-
-    RETURN_TYPES = ("INT",)
-    RETURN_NAMES = ("seed",)
-    FUNCTION = "generate_seed"
-    CATEGORY = "yet_essential/utils"
-
-    def generate_seed(self, seed):
-        return (int(seed),)
-
-
-class YEImageComparer:
-    def __init__(self):
-        self.output_dir = folder_paths.get_temp_directory()
-        self.type = "temp"
-        self.prefix_append = f"_temp_{uuid.uuid4().hex[:5]}"
-        self.compress_level = 1
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="YESeedGenerator",
+            display_name="YE Seed Generator",
+            category="yet_essential/utils",
+            inputs=[io.Int.Input("seed", default=0, min=0, max=cls.MAX_SEED)],
+            outputs=[io.Int.Output(display_name="seed")],
+        )
 
     @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {},
-            "optional": {
-                "image_a": ("IMAGE",),
-                "image_b": ("IMAGE",),
-            },
-            "hidden": {
-                "prompt": "PROMPT",
-                "extra_pnginfo": "EXTRA_PNGINFO",
-            },
-        }
+    def execute(cls, seed: int) -> io.NodeOutput:
+        return io.NodeOutput(int(seed))
 
-    RETURN_TYPES = ()
-    FUNCTION = "compare_images"
-    OUTPUT_NODE = True
-    CATEGORY = "yet_essential/utils"
 
-    def _save_temp_images(self, images, filename_prefix):
-        filename_prefix = f"{filename_prefix}{self.prefix_append}"
-        full_output_folder, filename, counter, subfolder, filename_prefix = folder_paths.get_save_image_path(
-            filename_prefix,
-            self.output_dir,
+class YEImageComparer(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="YEImageComparer",
+            display_name="YE Image Comparer",
+            category="yet_essential/utils",
+            is_output_node=True,
+            inputs=[
+                io.Image.Input("image_a", optional=True),
+                io.Image.Input("image_b", optional=True),
+            ],
+            outputs=[],
+        )
+
+    @classmethod
+    def _save_temp_images(cls, images: io.Image.Type, filename_prefix: str) -> list[dict[str, str]]:
+        output_dir = folder_paths.get_temp_directory()
+        type_name = "temp"
+        prefix_append = f"_temp_{uuid.uuid4().hex[:5]}"
+        full_output_folder, filename, counter, subfolder, _ = folder_paths.get_save_image_path(
+            f"{filename_prefix}{prefix_append}",
+            output_dir,
             images[0].shape[1],
             images[0].shape[0],
         )
 
-        results = []
+        results: list[dict[str, str]] = []
         for batch_number, image in enumerate(images):
-            i = 255.0 * image.cpu().numpy()
-            img = Image.fromarray(np.clip(i, 0, 255).astype(np.uint8))
-
+            arr = 255.0 * image.cpu().numpy()
+            img = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
             filename_with_batch_num = filename.replace("%batch_num%", str(batch_number))
             file = f"{filename_with_batch_num}_{counter:05}_.png"
-            img.save(
-                os.path.join(full_output_folder, file),
-                compress_level=self.compress_level,
-            )
-
-            results.append(
-                {
-                    "filename": file,
-                    "subfolder": subfolder,
-                    "type": self.type,
-                }
-            )
+            img.save(os.path.join(full_output_folder, file), compress_level=1)
+            results.append({"filename": file, "subfolder": subfolder, "type": type_name})
             counter += 1
 
         return results
 
-    def compare_images(self, image_a=None, image_b=None, prompt=None, extra_pnginfo=None):
-        result = {"ui": {"a_images": [], "b_images": []}}
+    @classmethod
+    def execute(
+        cls,
+        image_a: io.Image.Type | None = None,
+        image_b: io.Image.Type | None = None,
+    ) -> io.NodeOutput:
+        ui_payload = {"a_images": [], "b_images": []}
 
         if image_a is not None and len(image_a) > 0:
-            result["ui"]["a_images"] = self._save_temp_images(image_a, "ye.compare.a")
+            ui_payload["a_images"] = cls._save_temp_images(image_a, "ye.compare.a")
 
         if image_b is not None and len(image_b) > 0:
-            result["ui"]["b_images"] = self._save_temp_images(image_b, "ye.compare.b")
+            ui_payload["b_images"] = cls._save_temp_images(image_b, "ye.compare.b")
 
-        return result
+        return io.NodeOutput(ui=ui_payload)
 
 
-class YEKSampler:
+class YEKSampler(io.ComfyNode):
     @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "model": ("MODEL",),
-                "seed": ("INT", {"default": 0, "min": 0, "max": 0x7FFFFFFFFFFFFFFF}),
-                "variation_seed": ("INT", {"default": 0, "min": 0, "max": 0x7FFFFFFFFFFFFFFF}),
-                "variation_strength": ("FLOAT", {"default": 0.35, "min": 0.0, "max": 1.0, "step": 0.01}),
-                "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
-                "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0, "step": 0.1, "round": 0.01}),
-                "sampler_name": (comfy.samplers.KSampler.SAMPLERS,),
-                "scheduler": (comfy.samplers.KSampler.SCHEDULERS,),
-                "positive": ("CONDITIONING",),
-                "negative": ("CONDITIONING",),
-                "latent_image": ("LATENT",),
-                "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
-            }
-        }
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="YEKSampler",
+            display_name="YE KSampler",
+            category="yet_essential/sampling",
+            inputs=[
+                io.Model.Input("model"),
+                io.Int.Input("seed", default=0, min=0, max=0x7FFFFFFFFFFFFFFF),
+                io.Int.Input("variation_seed", default=0, min=0, max=0x7FFFFFFFFFFFFFFF),
+                io.Float.Input("variation_strength", default=0.35, min=0.0, max=1.0, step=0.01),
+                io.Int.Input("steps", default=20, min=1, max=10000),
+                io.Float.Input("cfg", default=8.0, min=0.0, max=100.0, step=0.1, round=0.01),
+                io.Combo.Input("sampler_name", options=list(comfy.samplers.KSampler.SAMPLERS)),
+                io.Combo.Input("scheduler", options=list(comfy.samplers.KSampler.SCHEDULERS)),
+                io.Conditioning.Input("positive"),
+                io.Conditioning.Input("negative"),
+                io.Latent.Input("latent_image"),
+                io.Float.Input("denoise", default=1.0, min=0.0, max=1.0, step=0.01),
+            ],
+            outputs=[io.Latent.Output()],
+        )
 
-    RETURN_TYPES = ("LATENT",)
-    FUNCTION = "sample"
-    CATEGORY = "yet_essential/sampling"
-
-    def sample(self, model, seed, variation_seed, variation_strength, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise=1.0):
+    @classmethod
+    def execute(
+        cls,
+        model: io.Model.Type,
+        seed: int,
+        variation_seed: int,
+        variation_strength: float,
+        steps: int,
+        cfg: float,
+        sampler_name: str,
+        scheduler: str,
+        positive: io.Conditioning.Type,
+        negative: io.Conditioning.Type,
+        latent_image: io.Latent.Type,
+        denoise: float = 1.0,
+    ) -> io.NodeOutput:
         latent_samples = comfy.sample.fix_empty_latent_channels(model, latent_image["samples"])
         batch_inds = latent_image["batch_index"] if "batch_index" in latent_image else None
         base_noise = comfy.sample.prepare_noise(latent_samples, seed, batch_inds)
-        
+
         strength = float(min(max(variation_strength, 0.0), 1.0))
         if strength > 0.0:
             variation_noise = comfy.sample.prepare_noise(latent_samples, variation_seed, batch_inds)
             noise = slerp_noise(base_noise, variation_noise, strength)
         else:
             noise = base_noise
-            
+
         noise_mask = latent_image["noise_mask"] if "noise_mask" in latent_image else None
         callback = latent_preview.prepare_callback(model, steps)
         disable_pbar = not comfy.utils.PROGRESS_BAR_ENABLED
@@ -350,97 +355,116 @@ class YEKSampler:
 
         out = latent_image.copy()
         out["samples"] = samples
-        return (out,)
+        return io.NodeOutput(out)
 
 
-class YELoadCheckpoint:
+class YELoadCheckpoint(io.ComfyNode):
     @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "ckpt_name": (folder_paths.get_filename_list("checkpoints"),),
-            }
-        }
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="YELoadCheckpoint",
+            display_name="YE Load Checkpoint",
+            category="yet_essential/loaders",
+            inputs=[
+                io.Combo.Input("ckpt_name", options=folder_paths.get_filename_list("checkpoints")),
+            ],
+            outputs=[io.Model.Output(), io.Clip.Output(), io.Vae.Output()],
+        )
 
-    RETURN_TYPES = ("MODEL", "CLIP", "VAE")
-    FUNCTION = "load_checkpoint"
-    CATEGORY = "yet_essential/loaders"
-
-    def load_checkpoint(self, ckpt_name):
+    @classmethod
+    def execute(cls, ckpt_name: str) -> io.NodeOutput:
         ckpt_path = folder_paths.get_full_path("checkpoints", ckpt_name)
-        out = comfy.sd.load_checkpoint_guess_config(ckpt_path, output_vae=True, output_clip=True, embedding_directory=folder_paths.get_folder_paths("embeddings"))
-        return out[:3]
+        out = comfy.sd.load_checkpoint_guess_config(
+            ckpt_path,
+            output_vae=True,
+            output_clip=True,
+            embedding_directory=folder_paths.get_folder_paths("embeddings"),
+        )
+        return io.NodeOutput(*out[:3])
 
 
-class YELoadDiffusionModel:
+class YELoadDiffusionModel(io.ComfyNode):
     @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "unet_name": (folder_paths.get_filename_list("diffusion_models"),),
-            }
-        }
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="YELoadDiffusionModel",
+            display_name="YE Load Diffusion Model",
+            category="yet_essential/loaders",
+            inputs=[io.Combo.Input("unet_name", options=folder_paths.get_filename_list("diffusion_models"))],
+            outputs=[io.Model.Output()],
+        )
 
-    RETURN_TYPES = ("MODEL",)
-    FUNCTION = "load_unet"
-    CATEGORY = "yet_essential/loaders"
-
-    def load_unet(self, unet_name):
+    @classmethod
+    def execute(cls, unet_name: str) -> io.NodeOutput:
         unet_path = folder_paths.get_full_path("diffusion_models", unet_name)
         model = comfy.sd.load_diffusion_model(unet_path)
-        return (model,)
+        return io.NodeOutput(model)
 
 
-class YELoadLora:
+class YELoadLora(io.ComfyNode):
     @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "model": ("MODEL",),
-                "clip": ("CLIP",),
-                "lora_name": (folder_paths.get_filename_list("loras"),),
-                "strength_model": ("FLOAT", {"default": 1.0, "min": -20.0, "max": 20.0, "step": 0.01}),
-                "strength_clip": ("FLOAT", {"default": 1.0, "min": -20.0, "max": 20.0, "step": 0.01}),
-            }
-        }
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="YELoadLora",
+            display_name="YE Load LoRA",
+            category="yet_essential/loaders",
+            inputs=[
+                io.Model.Input("model"),
+                io.Clip.Input("clip"),
+                io.Combo.Input("lora_name", options=folder_paths.get_filename_list("loras")),
+                io.Float.Input("strength_model", default=1.0, min=-20.0, max=20.0, step=0.01),
+                io.Float.Input("strength_clip", default=1.0, min=-20.0, max=20.0, step=0.01),
+            ],
+            outputs=[io.Model.Output(), io.Clip.Output()],
+        )
 
-    RETURN_TYPES = ("MODEL", "CLIP")
-    FUNCTION = "load_lora"
-    CATEGORY = "yet_essential/loaders"
-
-    def load_lora(self, model, clip, lora_name, strength_model, strength_clip):
+    @classmethod
+    def execute(
+        cls,
+        model: io.Model.Type,
+        clip: io.Clip.Type,
+        lora_name: str,
+        strength_model: float,
+        strength_clip: float,
+    ) -> io.NodeOutput:
         if strength_model == 0 and strength_clip == 0:
-            return (model, clip)
+            return io.NodeOutput(model, clip)
 
         lora_path = folder_paths.get_full_path("loras", lora_name)
         lora = comfy.utils.load_torch_file(lora_path, safe_load=True)
         model_lora, clip_lora = comfy.sd.load_lora_for_models(model, clip, lora, strength_model, strength_clip)
-        return (model_lora, clip_lora)
+        return io.NodeOutput(model_lora, clip_lora)
 
 
-class YELoadLoraModel:
+class YELoadLoraModel(io.ComfyNode):
     @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "model": ("MODEL",),
-                "lora_name": (folder_paths.get_filename_list("loras"),),
-                "strength_model": ("FLOAT", {"default": 1.0, "min": -20.0, "max": 20.0, "step": 0.01}),
-            }
-        }
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="YELoadLoraModel",
+            display_name="YE Load LoRA (Model Only)",
+            category="yet_essential/loaders",
+            inputs=[
+                io.Model.Input("model"),
+                io.Combo.Input("lora_name", options=folder_paths.get_filename_list("loras")),
+                io.Float.Input("strength_model", default=1.0, min=-20.0, max=20.0, step=0.01),
+            ],
+            outputs=[io.Model.Output()],
+        )
 
-    RETURN_TYPES = ("MODEL",)
-    FUNCTION = "load_lora_model"
-    CATEGORY = "yet_essential/loaders"
-
-    def load_lora_model(self, model, lora_name, strength_model):
+    @classmethod
+    def execute(
+        cls,
+        model: io.Model.Type,
+        lora_name: str,
+        strength_model: float,
+    ) -> io.NodeOutput:
         if strength_model == 0:
-            return (model,)
+            return io.NodeOutput(model)
 
         lora_path = folder_paths.get_full_path("loras", lora_name)
         lora = comfy.utils.load_torch_file(lora_path, safe_load=True)
         model_lora, _ = comfy.sd.load_lora_for_models(model, None, lora, strength_model, 0)
-        return (model_lora,)
+        return io.NodeOutput(model_lora)
 
 
 def _clamp_image(image: torch.Tensor) -> torch.Tensor:
@@ -448,7 +472,6 @@ def _clamp_image(image: torch.Tensor) -> torch.Tensor:
 
 
 def _channel_mean(image: torch.Tensor) -> torch.Tensor:
-    # ITU-R BT.709 luma coefficients
     weights = torch.tensor([0.2126, 0.7152, 0.0722], device=image.device, dtype=image.dtype)
     return (image[..., :3] * weights).sum(dim=-1, keepdim=True)
 
@@ -458,8 +481,7 @@ def _gaussian_kernel_1d(sigma: float, device: torch.device, dtype: torch.dtype) 
     radius = max(1, int(round(sigma * 3.0)))
     x = torch.arange(-radius, radius + 1, device=device, dtype=dtype)
     kernel = torch.exp(-(x * x) / (2.0 * sigma * sigma))
-    kernel = kernel / kernel.sum()
-    return kernel
+    return kernel / kernel.sum()
 
 
 def _gaussian_blur_bhwc(image: torch.Tensor, sigma: float) -> torch.Tensor:
@@ -480,10 +502,9 @@ def _gaussian_blur_bhwc(image: torch.Tensor, sigma: float) -> torch.Tensor:
 
 
 def _shift_channel_2d(channel: torch.Tensor, shift_x: int, shift_y: int) -> torch.Tensor:
-    # channel shape: [B, H, W]
     if shift_x == 0 and shift_y == 0:
         return channel
-    b, h, w = channel.shape
+    _, h, w = channel.shape
     pad_l = max(shift_x, 0)
     pad_r = max(-shift_x, 0)
     pad_t = max(shift_y, 0)
@@ -493,7 +514,13 @@ def _shift_channel_2d(channel: torch.Tensor, shift_x: int, shift_y: int) -> torc
     return x.squeeze(1)
 
 
-def _apply_adjust_stage(image: torch.Tensor, brightness: float, contrast: float, saturation: float, sharpness: float) -> torch.Tensor:
+def _apply_adjust_stage(
+    image: torch.Tensor,
+    brightness: float,
+    contrast: float,
+    saturation: float,
+    sharpness: float,
+) -> torch.Tensor:
     x = image
 
     if brightness != 0.0:
@@ -508,10 +535,8 @@ def _apply_adjust_stage(image: torch.Tensor, brightness: float, contrast: float,
         x = torch.cat([x_rgb, x[..., 3:]], dim=-1) if x.shape[-1] > 3 else x_rgb
 
     if sharpness > 0.0:
-        sigma = 0.8
-        amount = float(sharpness)
-        blurred = _gaussian_blur_bhwc(x, sigma=sigma)
-        x = x + amount * (x - blurred)
+        blurred = _gaussian_blur_bhwc(x, sigma=0.8)
+        x = x + float(sharpness) * (x - blurred)
 
     return _clamp_image(x)
 
@@ -537,8 +562,7 @@ def _apply_style_stage(
         rr = torch.sqrt(xx * xx + yy * yy) / 1.41421356237
         power = 0.5 + (1.0 - float(vignette_softness)) * 2.5
         vig = 1.0 - float(vignette_strength) * torch.pow(torch.clamp(rr, 0.0, 1.0), power)
-        vig = torch.clamp(vig, 0.0, 1.0).view(1, h, w, 1)
-        x = x * vig
+        x = x * torch.clamp(vig, 0.0, 1.0).view(1, h, w, 1)
 
     if film_grain > 0.0:
         g = torch.Generator(device="cpu")
@@ -579,27 +603,34 @@ def _normalize_pipeline(pipeline: dict[str, Any] | None) -> dict[str, Any]:
     return {"stages": stages}
 
 
-class YEPostFXAddAdjustStage:
+class YEPostFXAddAdjustStage(io.ComfyNode):
     @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "enabled": ("BOOLEAN", {"default": True}),
-                "brightness": ("FLOAT", {"default": 0.0, "min": -1.0, "max": 1.0, "step": 0.01}),
-                "contrast": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 3.0, "step": 0.01}),
-                "saturation": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 3.0, "step": 0.01}),
-                "sharpness": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 3.0, "step": 0.01}),
-            },
-            "optional": {
-                "pipeline": ("YE_POSTFX_PIPE",),
-            },
-        }
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="YEPostFXAddAdjustStage",
+            display_name="YE PostFX - Add Adjust Stage",
+            category="yet_essential/postfx",
+            inputs=[
+                io.Boolean.Input("enabled", default=True),
+                io.Float.Input("brightness", default=0.0, min=-1.0, max=1.0, step=0.01),
+                io.Float.Input("contrast", default=1.0, min=0.0, max=3.0, step=0.01),
+                io.Float.Input("saturation", default=1.0, min=0.0, max=3.0, step=0.01),
+                io.Float.Input("sharpness", default=0.0, min=0.0, max=3.0, step=0.01),
+                YEPostFXPipe.Input("pipeline", optional=True),
+            ],
+            outputs=[YEPostFXPipe.Output(display_name="pipeline")],
+        )
 
-    RETURN_TYPES = ("YE_POSTFX_PIPE",)
-    FUNCTION = "add_stage"
-    CATEGORY = "yet_essential/postfx"
-
-    def add_stage(self, enabled, brightness, contrast, saturation, sharpness, pipeline=None):
+    @classmethod
+    def execute(
+        cls,
+        enabled: bool,
+        brightness: float,
+        contrast: float,
+        saturation: float,
+        sharpness: float,
+        pipeline: dict[str, Any] | None = None,
+    ) -> io.NodeOutput:
         out = _normalize_pipeline(pipeline)
         stages = list(out["stages"])
         if enabled:
@@ -612,48 +643,47 @@ class YEPostFXAddAdjustStage:
                     "sharpness": float(sharpness),
                 }
             )
-        return ({"stages": stages},)
+        return io.NodeOutput({"stages": stages})
 
 
-class YEPostFXAddStyleStage:
+class YEPostFXAddStyleStage(io.ComfyNode):
     @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "enabled": ("BOOLEAN", {"default": True}),
-                "vignette_strength": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
-                "vignette_softness": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01}),
-                "film_grain": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
-                "grain_seed": ("INT", {"default": 0, "min": 0, "max": 0x7FFFFFFF}),
-                "chromatic_aberration": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 8.0, "step": 0.1}),
-                "ca_angle": ("FLOAT", {"default": 0.0, "min": -180.0, "max": 180.0, "step": 1.0}),
-                "bloom_strength": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 2.0, "step": 0.01}),
-                "bloom_radius": ("FLOAT", {"default": 1.5, "min": 0.0, "max": 12.0, "step": 0.1}),
-                "bloom_threshold": ("FLOAT", {"default": 0.7, "min": 0.0, "max": 1.0, "step": 0.01}),
-            },
-            "optional": {
-                "pipeline": ("YE_POSTFX_PIPE",),
-            },
-        }
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="YEPostFXAddStyleStage",
+            display_name="YE PostFX - Add Style Stage",
+            category="yet_essential/postfx",
+            inputs=[
+                io.Boolean.Input("enabled", default=True),
+                io.Float.Input("vignette_strength", default=0.0, min=0.0, max=1.0, step=0.01),
+                io.Float.Input("vignette_softness", default=0.5, min=0.0, max=1.0, step=0.01),
+                io.Float.Input("film_grain", default=0.0, min=0.0, max=1.0, step=0.01),
+                io.Int.Input("grain_seed", default=0, min=0, max=0x7FFFFFFF),
+                io.Float.Input("chromatic_aberration", default=0.0, min=0.0, max=8.0, step=0.1),
+                io.Float.Input("ca_angle", default=0.0, min=-180.0, max=180.0, step=1.0),
+                io.Float.Input("bloom_strength", default=0.0, min=0.0, max=2.0, step=0.01),
+                io.Float.Input("bloom_radius", default=1.5, min=0.0, max=12.0, step=0.1),
+                io.Float.Input("bloom_threshold", default=0.7, min=0.0, max=1.0, step=0.01),
+                YEPostFXPipe.Input("pipeline", optional=True),
+            ],
+            outputs=[YEPostFXPipe.Output(display_name="pipeline")],
+        )
 
-    RETURN_TYPES = ("YE_POSTFX_PIPE",)
-    FUNCTION = "add_stage"
-    CATEGORY = "yet_essential/postfx"
-
-    def add_stage(
-        self,
-        enabled,
-        vignette_strength,
-        vignette_softness,
-        film_grain,
-        grain_seed,
-        chromatic_aberration,
-        ca_angle,
-        bloom_strength,
-        bloom_radius,
-        bloom_threshold,
-        pipeline=None,
-    ):
+    @classmethod
+    def execute(
+        cls,
+        enabled: bool,
+        vignette_strength: float,
+        vignette_softness: float,
+        film_grain: float,
+        grain_seed: int,
+        chromatic_aberration: float,
+        ca_angle: float,
+        bloom_strength: float,
+        bloom_radius: float,
+        bloom_threshold: float,
+        pipeline: dict[str, Any] | None = None,
+    ) -> io.NodeOutput:
         out = _normalize_pipeline(pipeline)
         stages = list(out["stages"])
         if enabled:
@@ -671,44 +701,46 @@ class YEPostFXAddStyleStage:
                     "bloom_threshold": float(bloom_threshold),
                 }
             )
-        return ({"stages": stages},)
+        return io.NodeOutput({"stages": stages})
 
 
-class YEPostFXMergePipeline:
+class YEPostFXMergePipeline(io.ComfyNode):
     @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "pipeline_a": ("YE_POSTFX_PIPE",),
-                "pipeline_b": ("YE_POSTFX_PIPE",),
-            }
-        }
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="YEPostFXMergePipeline",
+            display_name="YE PostFX - Merge Pipeline",
+            category="yet_essential/postfx",
+            inputs=[
+                YEPostFXPipe.Input("pipeline_a"),
+                YEPostFXPipe.Input("pipeline_b"),
+            ],
+            outputs=[YEPostFXPipe.Output(display_name="pipeline")],
+        )
 
-    RETURN_TYPES = ("YE_POSTFX_PIPE",)
-    FUNCTION = "merge"
-    CATEGORY = "yet_essential/postfx"
-
-    def merge(self, pipeline_a, pipeline_b):
+    @classmethod
+    def execute(cls, pipeline_a: dict[str, Any], pipeline_b: dict[str, Any]) -> io.NodeOutput:
         a = _normalize_pipeline(pipeline_a)["stages"]
         b = _normalize_pipeline(pipeline_b)["stages"]
-        return ({"stages": list(a) + list(b)},)
+        return io.NodeOutput({"stages": list(a) + list(b)})
 
 
-class YEPostFXApplyPipeline:
+class YEPostFXApplyPipeline(io.ComfyNode):
     @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "image": ("IMAGE",),
-                "pipeline": ("YE_POSTFX_PIPE",),
-            }
-        }
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="YEPostFXApplyPipeline",
+            display_name="YE PostFX - Apply Pipeline",
+            category="yet_essential/postfx",
+            inputs=[
+                io.Image.Input("image"),
+                YEPostFXPipe.Input("pipeline"),
+            ],
+            outputs=[io.Image.Output()],
+        )
 
-    RETURN_TYPES = ("IMAGE",)
-    FUNCTION = "apply_pipeline"
-    CATEGORY = "yet_essential/postfx"
-
-    def apply_pipeline(self, image, pipeline):
+    @classmethod
+    def execute(cls, image: io.Image.Type, pipeline: dict[str, Any]) -> io.NodeOutput:
         out = image
         stages = _normalize_pipeline(pipeline)["stages"]
         for stage in stages:
@@ -736,41 +768,29 @@ class YEPostFXApplyPipeline:
                     bloom_radius=float(stage.get("bloom_radius", 1.5)),
                     bloom_threshold=float(stage.get("bloom_threshold", 0.7)),
                 )
-        return (_clamp_image(out),)
+        return io.NodeOutput(_clamp_image(out))
 
 
-NODE_CLASS_MAPPINGS = {
-    "YEPrompt": YEPrompt,
-    "YEClipTextEncodePrompt": YEClipTextEncodePrompt,
-    "YEImageUpscale": YEImageUpscale,
-    "YEKSampler": YEKSampler,
-    "YEEmptyLatentImage": YEEmptyLatentImage,
-    "YESeedGenerator": YESeedGenerator,
-    "YEImageComparer": YEImageComparer,
-    "YELoadCheckpoint": YELoadCheckpoint,
-    "YELoadDiffusionModel": YELoadDiffusionModel,
-    "YELoadLora": YELoadLora,
-    "YELoadLoraModel": YELoadLoraModel,
-    "YEPostFXAddAdjustStage": YEPostFXAddAdjustStage,
-    "YEPostFXAddStyleStage": YEPostFXAddStyleStage,
-    "YEPostFXMergePipeline": YEPostFXMergePipeline,
-    "YEPostFXApplyPipeline": YEPostFXApplyPipeline,
-}
+NODE_LIST: list[type[io.ComfyNode]] = [
+    YEPrompt,
+    YEClipTextEncodePrompt,
+    YEImageUpscale,
+    YEKSampler,
+    YEEmptyLatentImage,
+    YESeedGenerator,
+    YEImageComparer,
+    YELoadCheckpoint,
+    YELoadDiffusionModel,
+    YELoadLora,
+    YELoadLoraModel,
+    YEPostFXAddAdjustStage,
+    YEPostFXAddStyleStage,
+    YEPostFXMergePipeline,
+    YEPostFXApplyPipeline,
+]
 
-NODE_DISPLAY_NAME_MAPPINGS = {
-    "YEPrompt": "YE Prompt",
-    "YEClipTextEncodePrompt": "YE Clip Text Encode (Prompt)",
-    "YEImageUpscale": "YE Image Upscale",
-    "YEKSampler": "YE KSampler",
-    "YEEmptyLatentImage": "YE Empty Latent Image",
-    "YESeedGenerator": "YE Seed Generator",
-    "YEImageComparer": "YE Image Comparer",
-    "YELoadCheckpoint": "YE Load Checkpoint",
-    "YELoadDiffusionModel": "YE Load Diffusion Model",
-    "YELoadLora": "YE Load LoRA",
-    "YELoadLoraModel": "YE Load LoRA (Model Only)",
-    "YEPostFXAddAdjustStage": "YE PostFX - Add Adjust Stage",
-    "YEPostFXAddStyleStage": "YE PostFX - Add Style Stage",
-    "YEPostFXMergePipeline": "YE PostFX - Merge Pipeline",
-    "YEPostFXApplyPipeline": "YE PostFX - Apply Pipeline",
-}
+
+class YetEssentialExtension(ComfyExtension):
+    async def get_node_list(self) -> list[type[io.ComfyNode]]:
+        return NODE_LIST
+

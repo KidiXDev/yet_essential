@@ -1,11 +1,13 @@
-from .src.node import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
+from .src.node import YetEssentialExtension
 from .src import routes
 
 WEB_DIRECTORY = "./web"
 print(f"### YE Essential: Loading web directory from {WEB_DIRECTORY}")
 
+async def comfy_entrypoint() -> YetEssentialExtension:
+    return YetEssentialExtension()
+
 __all__ = [
-    "NODE_CLASS_MAPPINGS",
-    "NODE_DISPLAY_NAME_MAPPINGS",
+    "comfy_entrypoint",
     "WEB_DIRECTORY",
 ]
