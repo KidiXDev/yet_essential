@@ -145,6 +145,29 @@ async function getTagFiles() {
                     });
                 },
             },
+            {
+                id: "yet_essential.autocomplete_position",
+                name: "Autocomplete Position",
+                type: "combo",
+                defaultValue: "bottom_left",
+                options: [
+                    "bottom_center",
+                    "bottom_right",
+                    "bottom_left",
+                    "top_center",
+                    "top_left",
+                    "top_right",
+                ],
+                category: ["Yet Essential", "UI", "Autocomplete Position"],
+                onChange: (newVal) => {
+                    api.fetchApi("/yet_essential/settings/update", {
+                        method: "POST",
+                        body: JSON.stringify({
+                            autocomplete_position: newVal,
+                        }),
+                    });
+                },
+            },
         ],
         async setup() {
             // Sync settings from server

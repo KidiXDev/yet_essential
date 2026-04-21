@@ -102,6 +102,7 @@ class PromptAutocompleteController {
             insertion_suffix: ", ",
             smart_suffix: true,
             escape_parentheses: true,
+            autocomplete_position: "bottom_left",
         };
 
         this.boundOnInput = this.onInput.bind(this);
@@ -502,18 +503,82 @@ class PromptAutocompleteController {
             window.innerWidth - viewportPadding * 2,
         );
         const width = Math.min(preferredWidth, availableWidth);
+        const dropdownHeight = this.measureDropdownHeight(width);
+        const placement = this.getAutocompletePlacement();
+        const horizontal = placement.endsWith("_center")
+            ? "center"
+            : placement.endsWith("_right")
+              ? "right"
+              : "left";
+        const vertical = placement.startsWith("top") ? "top" : "bottom";
+        const rawLeft =
+            horizontal === "center"
+                ? caretRect.left - width / 2
+                : horizontal === "right"
+                  ? caretRect.left - width
+                  : caretRect.left;
+        const rawTop =
+            vertical === "top"
+                ? caretRect.top - dropdownHeight - 6
+                : caretRect.bottom + 6;
+        const maxTop = Math.max(
+            viewportPadding,
+            window.innerHeight - dropdownHeight - viewportPadding,
+        );
         const left = Math.min(
-            Math.max(caretRect.left, viewportPadding),
+            Math.max(rawLeft, viewportPadding),
             window.innerWidth - width - viewportPadding,
         );
         const top = Math.min(
-            Math.max(caretRect.bottom + 6, viewportPadding),
-            window.innerHeight - viewportPadding,
+            Math.max(rawTop, viewportPadding),
+            maxTop,
         );
 
         this.dropdownEl.style.left = `${Math.round(left)}px`;
         this.dropdownEl.style.top = `${Math.round(top)}px`;
         this.dropdownEl.style.width = `${Math.round(width)}px`;
+    }
+
+    measureDropdownHeight(width) {
+        if (this.dropdownEl.offsetHeight > 0) {
+            return this.dropdownEl.offsetHeight;
+        }
+
+        const previousDisplay = this.dropdownEl.style.display;
+        const previousVisibility = this.dropdownEl.style.visibility;
+        const previousWidth = this.dropdownEl.style.width;
+
+        this.dropdownEl.style.visibility = "hidden";
+        this.dropdownEl.style.display = "block";
+        this.dropdownEl.style.width = `${Math.round(width)}px`;
+        const height = this.dropdownEl.offsetHeight || this.dropdownEl.scrollHeight;
+        this.dropdownEl.style.display = previousDisplay;
+        this.dropdownEl.style.visibility = previousVisibility;
+        this.dropdownEl.style.width = previousWidth;
+
+        return height || 260;
+    }
+
+    getAutocompletePlacement() {
+        const settingPlacement = app?.extensionManager?.setting?.get?.(
+            "yet_essential.autocomplete_position",
+        );
+        const placement =
+            typeof settingPlacement === "string"
+                ? settingPlacement
+                : typeof this.settings.autocomplete_position === "string"
+                  ? this.settings.autocomplete_position
+                  : "";
+        const normalized = placement.toLowerCase().replaceAll("-", "_");
+        const allowed = new Set([
+            "bottom_center",
+            "bottom_right",
+            "bottom_left",
+            "top_center",
+            "top_left",
+            "top_right",
+        ]);
+        return allowed.has(normalized) ? normalized : "bottom_left";
     }
 
     getCaretViewportRect() {

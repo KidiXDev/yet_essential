@@ -25,6 +25,7 @@ class Settings:
         self.spacing_mode = "space"
         self.escape_parentheses = True
         self.show_post_count = False
+        self.autocomplete_position = "bottom_left"
         self.csv_file = ""
         self._load()
 
@@ -62,6 +63,8 @@ class Settings:
                         self.escape_parentheses = value.lower() == "true"
                     elif key == "show_post_count":
                         self.show_post_count = value.lower() == "true"
+                    elif key == "autocomplete_position":
+                        self.autocomplete_position = self._normalize_autocomplete_position(value)
                     elif key == "smart_suffix":
                         self.smart_suffix = value.lower() == "true"
                     elif key == "csv_file":
@@ -87,6 +90,7 @@ class Settings:
             "",
             "# [UI]",
             f"show_post_count={'true' if self.show_post_count else 'false'}",
+            f"autocomplete_position={self.autocomplete_position}",
         ]
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -115,9 +119,26 @@ class Settings:
             self.escape_parentheses = bool(data["escape_parentheses"])
         if "show_post_count" in data:
             self.show_post_count = bool(data["show_post_count"])
+        if "autocomplete_position" in data:
+            self.autocomplete_position = self._normalize_autocomplete_position(
+                str(data["autocomplete_position"])
+            )
         if "smart_suffix" in data:
             self.smart_suffix = bool(data["smart_suffix"])
         self.save()
+
+    @staticmethod
+    def _normalize_autocomplete_position(value: str) -> str:
+        normalized = value.strip().lower().replace(" ", "_").replace("-", "_")
+        allowed = {
+            "bottom_center",
+            "bottom_right",
+            "bottom_left",
+            "top_center",
+            "top_left",
+            "top_right",
+        }
+        return normalized if normalized in allowed else "bottom_left"
 
 
 def _safe_int(value: str, default: int = 0) -> int:
