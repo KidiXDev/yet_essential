@@ -111,6 +111,7 @@ class PromptAutocompleteController {
         this.boundOnFocus = this.onFocus.bind(this);
         this.boundOnResize = this.onViewportChanged.bind(this);
         this.boundOnScroll = this.onViewportChanged.bind(this);
+        this.boundOnDocumentPointerDown = this.onDocumentPointerDown.bind(this);
 
         this.inputEl.addEventListener("input", this.boundOnInput);
         this.inputEl.addEventListener("keyup", this.boundOnKeyUp);
@@ -120,6 +121,11 @@ class PromptAutocompleteController {
         this.inputEl.addEventListener("focus", this.boundOnFocus);
         window.addEventListener("resize", this.boundOnResize);
         window.addEventListener("scroll", this.boundOnScroll, true);
+        document.addEventListener(
+            "pointerdown",
+            this.boundOnDocumentPointerDown,
+            true,
+        );
     }
 
     destroy() {
@@ -132,6 +138,11 @@ class PromptAutocompleteController {
         this.inputEl.removeEventListener("focus", this.boundOnFocus);
         window.removeEventListener("resize", this.boundOnResize);
         window.removeEventListener("scroll", this.boundOnScroll, true);
+        document.removeEventListener(
+            "pointerdown",
+            this.boundOnDocumentPointerDown,
+            true,
+        );
         this.dropdownEl.remove();
     }
 
@@ -160,6 +171,30 @@ class PromptAutocompleteController {
             return;
         }
         this.positionDropdown();
+    }
+
+    onDocumentPointerDown(event) {
+        if (!this.visible) {
+            return;
+        }
+
+        const path =
+            typeof event.composedPath === "function"
+                ? event.composedPath()
+                : [];
+        if (path.includes(this.inputEl) || path.includes(this.dropdownEl)) {
+            return;
+        }
+
+        const target = event.target;
+        if (
+            target instanceof Node &&
+            (this.inputEl.contains(target) || this.dropdownEl.contains(target))
+        ) {
+            return;
+        }
+
+        this.hide();
     }
 
     onKeyDown(event) {
@@ -459,9 +494,124 @@ class PromptAutocompleteController {
 
     positionDropdown() {
         const rect = this.inputEl.getBoundingClientRect();
-        this.dropdownEl.style.left = `${Math.round(rect.left)}px`;
-        this.dropdownEl.style.top = `${Math.round(rect.bottom + 4)}px`;
-        this.dropdownEl.style.width = `${Math.round(rect.width)}px`;
+        const caretRect = this.getCaretViewportRect();
+        const viewportPadding = 8;
+        const preferredWidth = Math.min(Math.max(rect.width, 260), 520);
+        const availableWidth = Math.max(
+            160,
+            window.innerWidth - viewportPadding * 2,
+        );
+        const width = Math.min(preferredWidth, availableWidth);
+        const left = Math.min(
+            Math.max(caretRect.left, viewportPadding),
+            window.innerWidth - width - viewportPadding,
+        );
+        const top = Math.min(
+            Math.max(caretRect.bottom + 6, viewportPadding),
+            window.innerHeight - viewportPadding,
+        );
+
+        this.dropdownEl.style.left = `${Math.round(left)}px`;
+        this.dropdownEl.style.top = `${Math.round(top)}px`;
+        this.dropdownEl.style.width = `${Math.round(width)}px`;
+    }
+
+    getCaretViewportRect() {
+        if (this.inputEl instanceof HTMLTextAreaElement) {
+            return this.getTextareaCaretViewportRect();
+        }
+
+        const rect = this.inputEl.getBoundingClientRect();
+        return {
+            left: rect.left,
+            right: rect.left,
+            top: rect.top,
+            bottom: rect.bottom,
+            height: rect.height,
+        };
+    }
+
+    getTextareaCaretViewportRect() {
+        const inputStyle = window.getComputedStyle(this.inputEl);
+        const mirror = document.createElement("div");
+        const marker = document.createElement("span");
+        const rect = this.inputEl.getBoundingClientRect();
+        const cursor = this.inputEl.selectionStart ?? this.inputEl.value.length;
+        const layoutWidth = this.inputEl.offsetWidth || rect.width;
+        const layoutHeight = this.inputEl.offsetHeight || rect.height;
+        const scaleX = layoutWidth ? rect.width / layoutWidth : 1;
+        const scaleY = layoutHeight ? rect.height / layoutHeight : 1;
+
+        mirror.style.position = "fixed";
+        mirror.style.left = "-10000px";
+        mirror.style.top = "0";
+        mirror.style.width = `${layoutWidth}px`;
+        mirror.style.height = `${layoutHeight}px`;
+        mirror.style.boxSizing = "border-box";
+        mirror.style.overflow = "hidden";
+        mirror.style.visibility = "hidden";
+        mirror.style.pointerEvents = "none";
+        mirror.style.whiteSpace = "pre-wrap";
+        mirror.style.overflowWrap = "break-word";
+        mirror.style.wordBreak = inputStyle.wordBreak;
+
+        const copiedProperties = [
+            "borderTopWidth",
+            "borderRightWidth",
+            "borderBottomWidth",
+            "borderLeftWidth",
+            "fontFamily",
+            "fontSize",
+            "fontStyle",
+            "fontVariant",
+            "fontWeight",
+            "letterSpacing",
+            "lineHeight",
+            "paddingTop",
+            "paddingRight",
+            "paddingBottom",
+            "paddingLeft",
+            "tabSize",
+            "textAlign",
+            "textTransform",
+            "wordSpacing",
+        ];
+
+        copiedProperties.forEach((property) => {
+            mirror.style[property] = inputStyle[property];
+        });
+
+        const beforeCaret = this.inputEl.value.slice(0, cursor);
+        const lineHeight = Number.parseFloat(inputStyle.lineHeight);
+        const markerHeight = Number.isFinite(lineHeight)
+            ? lineHeight
+            : Number.parseFloat(inputStyle.fontSize) * 1.2 || 16;
+
+        mirror.textContent = beforeCaret;
+        marker.style.display = "inline-block";
+        marker.style.width = "1px";
+        marker.style.height = `${markerHeight}px`;
+        marker.style.verticalAlign = "top";
+        mirror.appendChild(marker);
+        document.body.appendChild(mirror);
+
+        const markerRect = marker.getBoundingClientRect();
+        const mirrorRect = mirror.getBoundingClientRect();
+        const localLeft =
+            markerRect.left - mirrorRect.left - this.inputEl.scrollLeft;
+        const localTop =
+            markerRect.top - mirrorRect.top - this.inputEl.scrollTop;
+        const localHeight = markerRect.height || markerHeight;
+        const caretRect = {
+            left: rect.left + localLeft * scaleX,
+            right: rect.left + (localLeft + markerRect.width) * scaleX,
+            top: rect.top + localTop * scaleY,
+            bottom: rect.top + (localTop + localHeight) * scaleY,
+            height: localHeight * scaleY,
+        };
+
+        mirror.remove();
+        return caretRect;
     }
 }
 

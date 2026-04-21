@@ -23,8 +23,8 @@ async def search_autocomplete(request: web.Request) -> web.Response:
                 "escape_parentheses": SETTINGS.escape_parentheses,
             },
             "items": TAG_INDEX.search(
-                query=query, 
-                limit=limit, 
+                query=query,
+                limit=limit,
                 algorithm=SETTINGS.algorithm,
                 sort_mode=SETTINGS.sort_mode
             ),
@@ -41,14 +41,14 @@ async def get_model_preview(request: web.Request) -> web.Response:
         if res: res = int(res)
     except ValueError:
         res = None
-    
+
     if not folder_type or not model_name:
         return web.Response(status=400)
-        
+
     preview_path = MODEL_PREVIEW_MANAGER.find_preview(folder_type, model_name, res=res)
     if not preview_path or not os.path.exists(preview_path):
         return web.Response(status=404)
-        
+
     return web.FileResponse(preview_path)
 
 
@@ -57,7 +57,7 @@ async def get_model_list(request: web.Request) -> web.Response:
     folder_type = request.query.get("type", "")
     if not folder_type:
         return web.Response(status=400)
-    
+
     models = MODEL_PREVIEW_MANAGER.list_models_with_previews(folder_type)
     return web.json_response(models)
 
@@ -71,7 +71,7 @@ async def update_settings(request: web.Request) -> web.Response:
 
     old_csv = SETTINGS.csv_file
     SETTINGS.update(data)
-    
+
     if SETTINGS.csv_file != old_csv:
         TAG_INDEX.update_path(BASE_DIR / "config" / "tag" / SETTINGS.csv_file)
 
@@ -98,6 +98,6 @@ async def list_tags(request: web.Request) -> web.Response:
     tag_dir = BASE_DIR / "config" / "tag"
     if not tag_dir.exists():
         return web.json_response([])
-    
+
     files = [f.name for f in tag_dir.iterdir() if f.is_file() and f.suffix.lower() == ".csv"]
     return web.json_response(sorted(files))
