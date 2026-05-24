@@ -106,20 +106,16 @@ class PromptAutocompleteController {
         };
 
         this.boundOnInput = this.onInput.bind(this);
-        this.boundOnKeyUp = this.onInput.bind(this);
         this.boundOnKeyDown = this.onKeyDown.bind(this);
         this.boundOnBlur = this.onBlur.bind(this);
-        this.boundOnFocus = this.onFocus.bind(this);
         this.boundOnResize = this.onViewportChanged.bind(this);
         this.boundOnScroll = this.onViewportChanged.bind(this);
         this.boundOnDocumentPointerDown = this.onDocumentPointerDown.bind(this);
 
         this.inputEl.addEventListener("input", this.boundOnInput);
-        this.inputEl.addEventListener("keyup", this.boundOnKeyUp);
         this.inputEl.addEventListener("compositionend", this.boundOnInput);
         this.inputEl.addEventListener("keydown", this.boundOnKeyDown);
         this.inputEl.addEventListener("blur", this.boundOnBlur);
-        this.inputEl.addEventListener("focus", this.boundOnFocus);
         window.addEventListener("resize", this.boundOnResize);
         window.addEventListener("scroll", this.boundOnScroll, true);
         document.addEventListener(
@@ -132,11 +128,9 @@ class PromptAutocompleteController {
     destroy() {
         this.hide();
         this.inputEl.removeEventListener("input", this.boundOnInput);
-        this.inputEl.removeEventListener("keyup", this.boundOnKeyUp);
         this.inputEl.removeEventListener("compositionend", this.boundOnInput);
         this.inputEl.removeEventListener("keydown", this.boundOnKeyDown);
         this.inputEl.removeEventListener("blur", this.boundOnBlur);
-        this.inputEl.removeEventListener("focus", this.boundOnFocus);
         window.removeEventListener("resize", this.boundOnResize);
         window.removeEventListener("scroll", this.boundOnScroll, true);
         document.removeEventListener(
@@ -147,23 +141,11 @@ class PromptAutocompleteController {
         this.dropdownEl.remove();
     }
 
-    onFocus() {
-        this.scheduleSearch();
-    }
-
     onBlur() {
         window.setTimeout(() => this.hide(), 100);
     }
 
     onInput(event) {
-        if (
-            event?.key &&
-            ["ArrowUp", "ArrowDown", "Enter", "Tab", "Escape"].includes(
-                event.key,
-            )
-        ) {
-            return;
-        }
         this.scheduleSearch();
     }
 
@@ -183,14 +165,14 @@ class PromptAutocompleteController {
             typeof event.composedPath === "function"
                 ? event.composedPath()
                 : [];
-        if (path.includes(this.inputEl) || path.includes(this.dropdownEl)) {
+        if (path.includes(this.dropdownEl)) {
             return;
         }
 
         const target = event.target;
         if (
             target instanceof Node &&
-            (this.inputEl.contains(target) || this.dropdownEl.contains(target))
+            this.dropdownEl.contains(target)
         ) {
             return;
         }
@@ -200,6 +182,15 @@ class PromptAutocompleteController {
 
     onKeyDown(event) {
         if (!this.visible || this.items.length === 0) {
+            return;
+        }
+
+        if (
+            ["ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"].includes(
+                event.key,
+            )
+        ) {
+            this.hide();
             return;
         }
 
@@ -486,6 +477,10 @@ class PromptAutocompleteController {
     }
 
     hide() {
+        if (this.debounceTimer !== null) {
+            window.clearTimeout(this.debounceTimer);
+            this.debounceTimer = null;
+        }
         this.dropdownEl.style.display = "none";
         this.dropdownEl.innerHTML = "";
         this.items = [];
@@ -837,9 +832,6 @@ function attachPromptAutocomplete(inputEl) {
     controllerMap.set(inputEl, controller);
     activeController = controller;
 
-    if (document.activeElement === inputEl) {
-        controller.scheduleSearch();
-    }
 }
 
 function getInputFromWidget(widget) {
