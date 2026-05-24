@@ -11,6 +11,8 @@ const TARGET_NODE_TYPES = new Set([
     "YELoadLoraModel",
     "YELoraStack",
 ]);
+const BASE_MODEL_FILTER_ALL = "All";
+const MANUAL_BASE_MODELS = [];
 
 const STYLES = `
 .ye-dialog-overlay {
@@ -83,6 +85,9 @@ const STYLES = `
     padding: 10px 20px;
     background: #111;
     border-bottom: 1px solid #222;
+    display: flex;
+    align-items: center;
+    gap: 10px;
 }
 
 .ye-dialog-filter {
@@ -95,6 +100,19 @@ const STYLES = `
     font-size: 1rem;
     outline: none;
     box-sizing: border-box;
+    flex: 1;
+}
+
+.ye-base-model-filter {
+    min-width: 210px;
+    max-width: 320px;
+    background: #000;
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 12px 10px;
+    color: #fff;
+    font-size: 0.95rem;
+    outline: none;
 }
 
 .ye-dialog-grid {
@@ -166,10 +184,14 @@ class YESelectionDialog {
         this.folderType = folderType;
         this.onSelect = onSelect;
         this.filterText = "";
+        this.baseModelFilter = BASE_MODEL_FILTER_ALL;
+        this.baseModelByName = new Map();
+        this.baseModelOptions = [BASE_MODEL_FILTER_ALL, ...MANUAL_BASE_MODELS];
 
         this.el = this.render();
         document.body.appendChild(this.el);
         this.filterInput.focus();
+        this.loadMetadata();
 
         this.onKeyDown = (e) => {
             if (e.key === "Escape") this.close();
@@ -200,6 +222,24 @@ class YESelectionDialog {
                 this.updateGrid();
             },
         });
+        this.baseModelSelect = $el(
+            "select.ye-base-model-filter",
+            {
+                onchange: (e) => {
+                    this.baseModelFilter = String(
+                        e.target.value || BASE_MODEL_FILTER_ALL,
+                    );
+                    this.updateGrid();
+                },
+            },
+            this.baseModelOptions.map((value) =>
+                $el(
+                    "option",
+                    { value, selected: value === this.baseModelFilter },
+                    [value],
+                ),
+            ),
+        );
 
         const overlay = $el(
             "div.ye-dialog-overlay",
@@ -218,7 +258,10 @@ class YESelectionDialog {
                             ["×"],
                         ),
                     ]),
-                    $el("div.ye-filter-container", [this.filterInput]),
+                    $el("div.ye-filter-container", [
+                        this.filterInput,
+                        this.baseModelSelect,
+                    ]),
                     this.grid,
                 ]),
             ],
@@ -230,9 +273,7 @@ class YESelectionDialog {
 
     updateGrid() {
         this.grid.innerHTML = "";
-        const filtered = this.values.filter((v) =>
-            v.toLowerCase().includes(this.filterText),
-        );
+        const filtered = this.values.filter((v) => this.matchesFilters(v));
 
         for (const val of filtered) {
             const cleanName = val
@@ -260,6 +301,82 @@ class YESelectionDialog {
             );
 
             this.grid.appendChild(card);
+        }
+    }
+
+    matchesFilters(modelName) {
+        const textMatch = modelName.toLowerCase().includes(this.filterText);
+        if (!textMatch) {
+            return false;
+        }
+        if (this.baseModelFilter === BASE_MODEL_FILTER_ALL) {
+            return true;
+        }
+        const baseModel = String(
+            this.baseModelByName.get(modelName) || "",
+        ).trim();
+        return baseModel === this.baseModelFilter;
+    }
+
+    updateBaseModelOptions() {
+        const detected = Array.from(this.baseModelByName.values())
+            .map((value) => String(value || "").trim())
+            .filter((value) => value.length > 0);
+        const unique = new Set([
+            BASE_MODEL_FILTER_ALL,
+            ...MANUAL_BASE_MODELS,
+            ...detected,
+        ]);
+        this.baseModelOptions = Array.from(unique);
+
+        if (!this.baseModelOptions.includes(this.baseModelFilter)) {
+            this.baseModelFilter = BASE_MODEL_FILTER_ALL;
+        }
+
+        if (!this.baseModelSelect) {
+            return;
+        }
+
+        this.baseModelSelect.innerHTML = "";
+        for (const value of this.baseModelOptions) {
+            const option = $el(
+                "option",
+                { value, selected: value === this.baseModelFilter },
+                [value],
+            );
+            this.baseModelSelect.appendChild(option);
+        }
+    }
+
+    async loadMetadata() {
+        try {
+            const response = await fetch(
+                `/yet_essential/model/metadata?type=${encodeURIComponent(this.folderType)}`,
+            );
+            if (!response.ok) {
+                return;
+            }
+            const rows = await response.json();
+            if (!Array.isArray(rows)) {
+                return;
+            }
+
+            this.baseModelByName.clear();
+            for (const row of rows) {
+                const modelName = String(row?.name || "").trim();
+                if (!modelName) {
+                    continue;
+                }
+                const baseModel = String(row?.base_model || "").trim();
+                if (baseModel) {
+                    this.baseModelByName.set(modelName, baseModel);
+                }
+            }
+
+            this.updateBaseModelOptions();
+            this.updateGrid();
+        } catch (error) {
+            // Keep UI usable when metadata is unavailable.
         }
     }
 }
@@ -327,7 +444,9 @@ class YENativeModelPreview {
                 const node = this.findNodeFromElement(event.target);
                 this.lastPointerNode = node;
                 this.lastPointerTarget = event.target || null;
-                this.lastPointerWidgetName = this.extractWidgetNameFromElement(event.target);
+                this.lastPointerWidgetName = this.extractWidgetNameFromElement(
+                    event.target,
+                );
                 this.lastPointerAt = Date.now();
             },
             true,
@@ -378,7 +497,10 @@ class YENativeModelPreview {
 
     findWidgetByName(node, name) {
         if (!node?.widgets || !name) return null;
-        return node.widgets.find((w) => String(w?.name || "") === String(name)) || null;
+        return (
+            node.widgets.find((w) => String(w?.name || "") === String(name)) ||
+            null
+        );
     }
 
     findNodeIdFromElement(el) {
@@ -490,27 +612,39 @@ class YENativeModelPreview {
         const nodeType = String(node?.comfyClass || node?.type || "").trim();
         if (nodeType === "YELoraStack") {
             if (this.isLoraStackSlotWidget(this.lastPointerWidgetName)) {
-                const pointedWidget = this.findWidgetByName(node, this.lastPointerWidgetName);
+                const pointedWidget = this.findWidgetByName(
+                    node,
+                    this.lastPointerWidgetName,
+                );
                 if (pointedWidget?.type === "combo") {
                     return { node, widget: pointedWidget };
                 }
             }
 
             const loraWidgets = node.widgets.filter(
-                (w) => w?.type === "combo" && this.isLoraStackSlotWidget(w?.name),
+                (w) =>
+                    w?.type === "combo" && this.isLoraStackSlotWidget(w?.name),
             );
             const visibleLoraWidgets = loraWidgets.filter(
                 (w) => !w?.hidden && !w?.options?.hidden,
             );
-            const candidates = visibleLoraWidgets.length > 0 ? visibleLoraWidgets : loraWidgets;
+            const candidates =
+                visibleLoraWidgets.length > 0
+                    ? visibleLoraWidgets
+                    : loraWidgets;
 
             for (const w of candidates) {
                 if (!w?.options || !Array.isArray(w.options.values)) {
                     continue;
                 }
                 const values = w.options.values;
-                const matchCount = sample.filter((s) => values.includes(s)).length;
-                if (matchCount >= 3 || (sample.length > 0 && matchCount === sample.length)) {
+                const matchCount = sample.filter((s) =>
+                    values.includes(s),
+                ).length;
+                if (
+                    matchCount >= 3 ||
+                    (sample.length > 0 && matchCount === sample.length)
+                ) {
                     return { node, widget: w };
                 }
             }

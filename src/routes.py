@@ -63,6 +63,16 @@ async def get_model_list(request: web.Request) -> web.Response:
     return web.json_response(models)
 
 
+@PromptServer.instance.routes.get("/yet_essential/model/metadata")
+async def get_model_metadata(request: web.Request) -> web.Response:
+    folder_type = request.query.get("type", "")
+    if not folder_type:
+        return web.Response(status=400)
+
+    models = MODEL_PREVIEW_MANAGER.list_models_with_metadata(folder_type)
+    return web.json_response(models)
+
+
 @PromptServer.instance.routes.post("/yet_essential/settings/update")
 async def update_settings(request: web.Request) -> web.Response:
     try:

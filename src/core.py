@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -468,6 +469,64 @@ class ModelPreviewManager:
                 "name": model_name,
                 "has_preview": preview_path is not None
             })
+        return results
+
+    def _read_cm_info(self, folder_type: str, model_name: str) -> dict[str, Any] | None:
+        full_path = folder_paths.get_full_path(folder_type, model_name)
+        if not full_path:
+            return None
+
+        model_path = Path(full_path)
+        parent = model_path.parent
+        full_name = model_path.name
+        stem = model_path.stem
+
+        candidates = [
+            parent / f"{full_name}.cm-info.json",
+            parent / f"{stem}.cm-info.json",
+        ]
+
+        for candidate in candidates:
+            if not candidate.is_file():
+                continue
+            try:
+                with candidate.open("r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+            except Exception:
+                continue
+
+        return None
+
+    def _extract_base_model(self, metadata: dict[str, Any] | None) -> str | None:
+        if not isinstance(metadata, dict):
+            return None
+
+        candidates = [
+            metadata.get("BaseModel"),
+            metadata.get("baseModel"),
+            metadata.get("base_model"),
+        ]
+        for value in candidates:
+            text = str(value or "").strip()
+            if text:
+                return text
+        return None
+
+    def list_models_with_metadata(self, folder_type: str) -> list[dict[str, Any]]:
+        models = folder_paths.get_filename_list(folder_type)
+        results = []
+        for model_name in models:
+            preview_path = self.find_preview(folder_type, model_name)
+            metadata = self._read_cm_info(folder_type, model_name)
+            results.append(
+                {
+                    "name": model_name,
+                    "has_preview": preview_path is not None,
+                    "base_model": self._extract_base_model(metadata),
+                }
+            )
         return results
 
 
