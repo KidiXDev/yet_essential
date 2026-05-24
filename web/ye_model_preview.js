@@ -286,8 +286,11 @@ class YESelectionDialog {
             const img = document.createElement("img");
             img.className = "ye-card-img";
             img.loading = "lazy";
-            img.src = thumbUrl;
             img.onload = () => img.classList.add("loaded");
+            img.src = thumbUrl;
+            if (img.complete) {
+                img.classList.add("loaded");
+            }
 
             const card = $el(
                 "div.ye-dialog-card",
@@ -350,6 +353,7 @@ class YESelectionDialog {
 
     async loadMetadata() {
         try {
+            const previousSize = this.baseModelByName.size;
             const response = await fetch(
                 `/yet_essential/model/metadata?type=${encodeURIComponent(this.folderType)}`,
             );
@@ -374,7 +378,13 @@ class YESelectionDialog {
             }
 
             this.updateBaseModelOptions();
-            this.updateGrid();
+            if (
+                this.baseModelFilter !== BASE_MODEL_FILTER_ALL ||
+                this.filterText.length > 0 ||
+                this.baseModelByName.size !== previousSize
+            ) {
+                this.updateGrid();
+            }
         } catch (error) {
             // Keep UI usable when metadata is unavailable.
         }
