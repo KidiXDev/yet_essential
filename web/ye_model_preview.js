@@ -1,5 +1,6 @@
 import { app } from "../../scripts/app.js";
-import { $el } from "../../scripts/ui.js";
+
+const { $el } = window.comfyAPI.ui;
 
 const Z_INDEX = 2147483647;
 const LAST_POINTER_TTL_MS = 1500;
@@ -8,6 +9,7 @@ const TARGET_NODE_TYPES = new Set([
     "YELoadDiffusionModel",
     "YELoadLora",
     "YELoadLoraModel",
+    "YELoraStack",
 ]);
 
 const STYLES = `
@@ -274,6 +276,8 @@ const MODEL_EXTENSIONS = [
 class YENativeModelPreview {
     constructor() {
         this.lastPointerNode = null;
+        this.lastPointerTarget = null;
+        this.lastPointerWidgetName = null;
         this.lastPointerAt = 0;
         this.setupStyles();
         this.setupNodeTracking();
@@ -322,10 +326,59 @@ class YENativeModelPreview {
             (event) => {
                 const node = this.findNodeFromElement(event.target);
                 this.lastPointerNode = node;
+                this.lastPointerTarget = event.target || null;
+                this.lastPointerWidgetName = this.extractWidgetNameFromElement(event.target);
                 this.lastPointerAt = Date.now();
             },
             true,
         );
+    }
+
+    extractWidgetNameFromElement(el) {
+        let current = el;
+        while (current) {
+            const candidates = [
+                current?.dataset?.widgetName,
+                current?.dataset?.name,
+                typeof current?.getAttribute === "function"
+                    ? current.getAttribute("data-widget-name")
+                    : null,
+                typeof current?.getAttribute === "function"
+                    ? current.getAttribute("data-name")
+                    : null,
+                typeof current?.getAttribute === "function"
+                    ? current.getAttribute("name")
+                    : null,
+                typeof current?.getAttribute === "function"
+                    ? current.getAttribute("aria-label")
+                    : null,
+            ].filter(Boolean);
+
+            for (const raw of candidates) {
+                const value = String(raw).trim();
+                if (value) {
+                    return value;
+                }
+            }
+
+            if (current.parentNode) {
+                current = current.parentNode;
+            } else if (current instanceof ShadowRoot) {
+                current = current.host;
+            } else {
+                break;
+            }
+        }
+        return null;
+    }
+
+    isLoraStackSlotWidget(widgetName) {
+        return /^lora_name_\d+$/.test(String(widgetName || ""));
+    }
+
+    findWidgetByName(node, name) {
+        if (!node?.widgets || !name) return null;
+        return node.widgets.find((w) => String(w?.name || "") === String(name)) || null;
     }
 
     findNodeIdFromElement(el) {
@@ -433,6 +486,37 @@ class YENativeModelPreview {
 
         const sample = items.slice(0, 5);
         if (!node.widgets) return null;
+
+        const nodeType = String(node?.comfyClass || node?.type || "").trim();
+        if (nodeType === "YELoraStack") {
+            if (this.isLoraStackSlotWidget(this.lastPointerWidgetName)) {
+                const pointedWidget = this.findWidgetByName(node, this.lastPointerWidgetName);
+                if (pointedWidget?.type === "combo") {
+                    return { node, widget: pointedWidget };
+                }
+            }
+
+            const loraWidgets = node.widgets.filter(
+                (w) => w?.type === "combo" && this.isLoraStackSlotWidget(w?.name),
+            );
+            const visibleLoraWidgets = loraWidgets.filter(
+                (w) => !w?.hidden && !w?.options?.hidden,
+            );
+            const candidates = visibleLoraWidgets.length > 0 ? visibleLoraWidgets : loraWidgets;
+
+            for (const w of candidates) {
+                if (!w?.options || !Array.isArray(w.options.values)) {
+                    continue;
+                }
+                const values = w.options.values;
+                const matchCount = sample.filter((s) => values.includes(s)).length;
+                if (matchCount >= 3 || (sample.length > 0 && matchCount === sample.length)) {
+                    return { node, widget: w };
+                }
+            }
+            return null;
+        }
+
         for (const w of node.widgets) {
             if (
                 w.type === "combo" &&

@@ -467,6 +467,69 @@ class YELoadLoraModel(io.ComfyNode):
         return io.NodeOutput(model_lora)
 
 
+class YELoraStack(io.ComfyNode):
+    MAX_SLOTS = 25
+    NONE_OPTION = "None"
+
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        lora_options = [cls.NONE_OPTION, *folder_paths.get_filename_list("loras")]
+        inputs: list[Any] = [
+            io.Model.Input("model"),
+            io.Clip.Input("clip"),
+        ]
+        for idx in range(1, cls.MAX_SLOTS + 1):
+            inputs.extend(
+                [
+                    io.Combo.Input(f"lora_name_{idx}", options=lora_options, default=cls.NONE_OPTION),
+                    io.Float.Input(f"strength_model_{idx}", default=1.0, min=-20.0, max=20.0, step=0.01),
+                    io.Float.Input(f"strength_clip_{idx}", default=1.0, min=-20.0, max=20.0, step=0.01),
+                ]
+            )
+
+        return io.Schema(
+            node_id="YELoraStack",
+            display_name="YE LoRA Stack",
+            category="yet_essential/loaders",
+            inputs=inputs,
+            outputs=[io.Model.Output(), io.Clip.Output()],
+        )
+
+    @classmethod
+    def _slot_lora_name(cls, value: Any) -> str:
+        text = str(value or "").strip()
+        return "" if text == cls.NONE_OPTION else text
+
+    @classmethod
+    def execute(cls, model: io.Model.Type, clip: io.Clip.Type, **kwargs: Any) -> io.NodeOutput:
+        model_out = model
+        clip_out = clip
+
+        for idx in range(1, cls.MAX_SLOTS + 1):
+            lora_name = cls._slot_lora_name(kwargs.get(f"lora_name_{idx}"))
+            if not lora_name:
+                continue
+
+            strength_model = float(kwargs.get(f"strength_model_{idx}", 1.0))
+            strength_clip = float(kwargs.get(f"strength_clip_{idx}", 1.0))
+            if strength_model == 0 and strength_clip == 0:
+                continue
+
+            lora_path = folder_paths.get_full_path("loras", lora_name)
+            if lora_path is None:
+                raise RuntimeError(f"YELoraStack: LoRA file not found: {lora_name}")
+            lora = comfy.utils.load_torch_file(lora_path, safe_load=True)
+            model_out, clip_out = comfy.sd.load_lora_for_models(
+                model_out,
+                clip_out,
+                lora,
+                strength_model,
+                strength_clip,
+            )
+
+        return io.NodeOutput(model_out, clip_out)
+
+
 def _clamp_image(image: torch.Tensor) -> torch.Tensor:
     return torch.clamp(image, 0.0, 1.0)
 
@@ -783,6 +846,7 @@ NODE_LIST: list[type[io.ComfyNode]] = [
     YELoadDiffusionModel,
     YELoadLora,
     YELoadLoraModel,
+    YELoraStack,
     YEPostFXAddAdjustStage,
     YEPostFXAddStyleStage,
     YEPostFXMergePipeline,
@@ -793,4 +857,3 @@ NODE_LIST: list[type[io.ComfyNode]] = [
 class YetEssentialExtension(ComfyExtension):
     async def get_node_list(self) -> list[type[io.ComfyNode]]:
         return NODE_LIST
-
