@@ -10,6 +10,7 @@ const TARGET_NODE_TYPES = new Set([
     "YELoadLora",
     "YELoadLoraModel",
     "YELoraStack",
+    "YELoraStackModel",
 ]);
 const BASE_MODEL_FILTER_ALL = "All";
 const MANUAL_BASE_MODELS = [];
@@ -620,7 +621,7 @@ class YENativeModelPreview {
         if (!node.widgets) return null;
 
         const nodeType = String(node?.comfyClass || node?.type || "").trim();
-        if (nodeType === "YELoraStack") {
+        if (nodeType === "YELoraStack" || nodeType === "YELoraStackModel") {
             if (this.isLoraStackSlotWidget(this.lastPointerWidgetName)) {
                 const pointedWidget = this.findWidgetByName(
                     node,

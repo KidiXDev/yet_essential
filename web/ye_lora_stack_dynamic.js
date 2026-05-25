@@ -1,7 +1,7 @@
 import { app } from "../../scripts/app.js";
 
 const EXTENSION_NAME = "yet_essential.lora_stack_dynamic_widgets";
-const TARGET_NODE_NAME = "YELoraStack";
+const TARGET_NODE_NAMES = ["YELoraStack", "YELoraStackModel"];
 const MAX_SLOTS = 25;
 const SLOT_NONE = "None";
 const SYNC_DELAYS_MS = [0, 60, 200, 600];
@@ -78,11 +78,15 @@ function computeVisibleSlots(node) {
 
 function updateSlotVisibility(node) {
     const visibleSlots = computeVisibleSlots(node);
+    const nodeName = node?.comfyClass || node?.type;
+    const isModelOnly = nodeName === "YELoraStackModel";
     for (let idx = 1; idx <= MAX_SLOTS; idx += 1) {
         const show = idx <= visibleSlots;
         toggleWidget(findWidgetByName(node, `lora_name_${idx}`), show);
         toggleWidget(findWidgetByName(node, `strength_model_${idx}`), show);
-        toggleWidget(findWidgetByName(node, `strength_clip_${idx}`), show);
+        if (!isModelOnly) {
+            toggleWidget(findWidgetByName(node, `strength_clip_${idx}`), show);
+        }
     }
     refreshNodeLayout(node);
 }
@@ -150,17 +154,19 @@ function ensureWatcher(node) {
 app.registerExtension({
     name: EXTENSION_NAME,
     nodeCreated(node) {
-        if (node?.comfyClass === TARGET_NODE_NAME || node?.type === TARGET_NODE_NAME) {
+        const nodeName = node?.comfyClass || node?.type;
+        if (TARGET_NODE_NAMES.includes(nodeName)) {
             hookLoraStackNode(node);
         }
     },
     loadedGraphNode(node) {
-        if (node?.comfyClass === TARGET_NODE_NAME || node?.type === TARGET_NODE_NAME) {
+        const nodeName = node?.comfyClass || node?.type;
+        if (TARGET_NODE_NAMES.includes(nodeName)) {
             hookLoraStackNode(node);
         }
     },
     async beforeRegisterNodeDef(nodeType, nodeData) {
-        if (nodeData.name !== TARGET_NODE_NAME) {
+        if (!TARGET_NODE_NAMES.includes(nodeData.name)) {
             return;
         }
 

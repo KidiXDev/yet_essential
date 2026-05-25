@@ -23,6 +23,7 @@ from .core import slerp_noise
 
 
 YEPostFXPipe = io.Custom("YE_POSTFX_PIPE")
+YEPromptValue = io.Custom("YE_PROMPT_VALUE")
 
 
 def _prompt_input() -> io.String.Input:
@@ -35,6 +36,38 @@ def _prompt_input() -> io.String.Input:
     )
 
 
+def _format_prompt_text(prompt: str) -> str:
+    return ", ".join([part.strip() for part in prompt.split(",") if part.strip()]).strip()
+
+
+def _normalize_prompt_part(prompt_part: str) -> str:
+    return " ".join(prompt_part.lower().split())
+
+
+def _remove_negative_overlap(positive_prompt: str, negative_prompt: str) -> str:
+    positive_parts = [part.strip() for part in positive_prompt.split(",") if part.strip()]
+    negative_parts = [part.strip() for part in negative_prompt.split(",") if part.strip()]
+    positive_keys = {_normalize_prompt_part(part) for part in positive_parts}
+    filtered_negative_parts = [
+        part for part in negative_parts if _normalize_prompt_part(part) not in positive_keys
+    ]
+    return ", ".join(filtered_negative_parts)
+
+
+def _make_prompt_value(prompt: str) -> dict[str, str]:
+    return {"text": prompt}
+
+
+def _read_prompt_value(prompt_value: Any, node_name: str, input_name: str) -> str:
+    if isinstance(prompt_value, dict):
+        text = prompt_value.get("text")
+        if isinstance(text, str):
+            return text
+    raise RuntimeError(
+        f"{node_name}: invalid '{input_name}' input. Connect it from YE Prompt output."
+    )
+
+
 class YEPrompt(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -43,12 +76,16 @@ class YEPrompt(io.ComfyNode):
             display_name="YE Prompt",
             category="yet_essential/prompt",
             inputs=[_prompt_input()],
-            outputs=[io.String.Output(display_name="prompt")],
+            outputs=[
+                io.String.Output(display_name="prompt"),
+                YEPromptValue.Output(display_name="prompt_value"),
+            ],
         )
 
     @classmethod
     def execute(cls, prompt: str) -> io.NodeOutput:
-        return io.NodeOutput(prompt)
+        prompt = _format_prompt_text(prompt)
+        return io.NodeOutput(prompt, _make_prompt_value(prompt))
 
 
 class YEClipTextEncodePrompt(io.ComfyNode):
@@ -78,10 +115,89 @@ class YEClipTextEncodePrompt(io.ComfyNode):
             )
 
         if format_prompt:
-            prompt = ", ".join([p.strip() for p in prompt.split(",") if p.strip()]).strip()
+            prompt = _format_prompt_text(prompt)
 
         tokens = clip.tokenize(prompt)
         return io.NodeOutput(clip.encode_from_tokens_scheduled(tokens), prompt)
+
+
+class YEPromptUtil(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="YEPromptUtil",
+            display_name="YE Prompt Util",
+            category="yet_essential/prompt",
+            inputs=[
+                YEPromptValue.Input("positive"),
+                YEPromptValue.Input("negative"),
+            ],
+            outputs=[
+                io.String.Output(display_name="positive"),
+                io.String.Output(display_name="negative"),
+            ],
+        )
+
+    @classmethod
+    def execute(
+        cls,
+        positive: Any,
+        negative: Any,
+    ) -> io.NodeOutput:
+        positive_prompt = _read_prompt_value(positive, "YEPromptUtil", "positive")
+        negative_prompt = _read_prompt_value(negative, "YEPromptUtil", "negative")
+        positive_prompt = _format_prompt_text(positive_prompt)
+        negative_prompt = _format_prompt_text(negative_prompt)
+        negative_prompt = _remove_negative_overlap(positive_prompt, negative_prompt)
+        return io.NodeOutput(positive_prompt, negative_prompt)
+
+
+class YEClipTextUtil(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="YEClipTextUtil",
+            display_name="YE Clip Text Util",
+            category="yet_essential/prompt",
+            inputs=[
+                io.Clip.Input("clip"),
+                YEPromptValue.Input("positive"),
+                YEPromptValue.Input("negative"),
+                io.Boolean.Input("format_prompt", default=True),
+            ],
+            outputs=[
+                io.Conditioning.Output(display_name="positive"),
+                io.Conditioning.Output(display_name="negative"),
+            ],
+        )
+
+    @classmethod
+    def execute(
+        cls,
+        clip,
+        positive: Any,
+        negative: Any,
+        format_prompt: bool,
+    ) -> io.NodeOutput:
+        if clip is None:
+            raise RuntimeError(
+                "YEClipTextUtil: clip input is invalid (None). "
+                "Ensure your checkpoint/model loader outputs a valid CLIP."
+            )
+
+        positive_prompt = _read_prompt_value(positive, "YEClipTextUtil", "positive")
+        negative_prompt = _read_prompt_value(negative, "YEClipTextUtil", "negative")
+        if format_prompt:
+            positive_prompt = _format_prompt_text(positive_prompt)
+            negative_prompt = _format_prompt_text(negative_prompt)
+        negative_prompt = _remove_negative_overlap(positive_prompt, negative_prompt)
+
+        positive_tokens = clip.tokenize(positive_prompt)
+        negative_tokens = clip.tokenize(negative_prompt)
+
+        positive_conditioning = clip.encode_from_tokens_scheduled(positive_tokens)
+        negative_conditioning = clip.encode_from_tokens_scheduled(negative_tokens)
+        return io.NodeOutput(positive_conditioning, negative_conditioning)
 
 
 class YEImageUpscale(io.ComfyNode):
@@ -468,7 +584,7 @@ class YELoadLoraModel(io.ComfyNode):
 
 
 class YELoraStack(io.ComfyNode):
-    MAX_SLOTS = 25
+    MAX_SLOTS = 8
     NONE_OPTION = "None"
 
     @classmethod
@@ -528,6 +644,65 @@ class YELoraStack(io.ComfyNode):
             )
 
         return io.NodeOutput(model_out, clip_out)
+
+
+class YELoraStackModel(io.ComfyNode):
+    MAX_SLOTS = 8
+    NONE_OPTION = "None"
+
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        lora_options = [cls.NONE_OPTION, *folder_paths.get_filename_list("loras")]
+        inputs: list[Any] = [
+            io.Model.Input("model"),
+        ]
+        for idx in range(1, cls.MAX_SLOTS + 1):
+            inputs.extend(
+                [
+                    io.Combo.Input(f"lora_name_{idx}", options=lora_options, default=cls.NONE_OPTION),
+                    io.Float.Input(f"strength_model_{idx}", default=1.0, min=-20.0, max=20.0, step=0.01),
+                ]
+            )
+
+        return io.Schema(
+            node_id="YELoraStackModel",
+            display_name="YE LoRA Stack (Model Only)",
+            category="yet_essential/loaders",
+            inputs=inputs,
+            outputs=[io.Model.Output()],
+        )
+
+    @classmethod
+    def _slot_lora_name(cls, value: Any) -> str:
+        text = str(value or "").strip()
+        return "" if text == cls.NONE_OPTION else text
+
+    @classmethod
+    def execute(cls, model: io.Model.Type, **kwargs: Any) -> io.NodeOutput:
+        model_out = model
+
+        for idx in range(1, cls.MAX_SLOTS + 1):
+            lora_name = cls._slot_lora_name(kwargs.get(f"lora_name_{idx}"))
+            if not lora_name:
+                continue
+
+            strength_model = float(kwargs.get(f"strength_model_{idx}", 1.0))
+            if strength_model == 0:
+                continue
+
+            lora_path = folder_paths.get_full_path("loras", lora_name)
+            if lora_path is None:
+                raise RuntimeError(f"YELoraStackModel: LoRA file not found: {lora_name}")
+            lora = comfy.utils.load_torch_file(lora_path, safe_load=True)
+            model_out, _ = comfy.sd.load_lora_for_models(
+                model_out,
+                None,
+                lora,
+                strength_model,
+                0,
+            )
+
+        return io.NodeOutput(model_out)
 
 
 def _clamp_image(image: torch.Tensor) -> torch.Tensor:
@@ -837,6 +1012,8 @@ class YEPostFXApplyPipeline(io.ComfyNode):
 NODE_LIST: list[type[io.ComfyNode]] = [
     YEPrompt,
     YEClipTextEncodePrompt,
+    YEPromptUtil,
+    YEClipTextUtil,
     YEImageUpscale,
     YEKSampler,
     YEEmptyLatentImage,
@@ -847,6 +1024,7 @@ NODE_LIST: list[type[io.ComfyNode]] = [
     YELoadLora,
     YELoadLoraModel,
     YELoraStack,
+    YELoraStackModel,
     YEPostFXAddAdjustStage,
     YEPostFXAddStyleStage,
     YEPostFXMergePipeline,
