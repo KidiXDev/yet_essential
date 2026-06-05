@@ -295,7 +295,14 @@ class TagAutocompleteIndex:
 
         return best_score, matched_on
 
-    def search(self, query: str, limit: int = 20, algorithm: str = "fuzzy", sort_mode: str = "score") -> list[dict[str, Any]]:
+    def search(
+        self,
+        query: str,
+        limit: int = 20,
+        algorithm: str = "fuzzy",
+        sort_mode: str = "score",
+        category: int | None = None,
+    ) -> list[dict[str, Any]]:
         self._reload_if_needed()
         if limit <= 0:
             return []
@@ -318,6 +325,8 @@ class TagAutocompleteIndex:
             seen_ids.add(entry_idx)
 
             entry = entries[entry_idx]
+            if category is not None and entry.category != category:
+                continue
             score, matched_on = self._score_entry(entry, normalized_query, algorithm=algorithm)
             if normalized_query and score <= 0:
                 continue

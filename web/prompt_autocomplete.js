@@ -76,6 +76,10 @@ function normalizeQuery(value) {
     return value.trim().toLowerCase().replaceAll(" ", "_");
 }
 
+function isArtistToken(value) {
+    return value.trimStart().startsWith("@");
+}
+
 function formatCount(num) {
     if (num >= 1000000)
         return (num / 1000000).toFixed(1).replace(/\.0$/, "") + "m";
@@ -170,10 +174,7 @@ class PromptAutocompleteController {
         }
 
         const target = event.target;
-        if (
-            target instanceof Node &&
-            this.dropdownEl.contains(target)
-        ) {
+        if (target instanceof Node && this.dropdownEl.contains(target)) {
             return;
         }
 
@@ -186,9 +187,14 @@ class PromptAutocompleteController {
         }
 
         if (
-            ["ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"].includes(
-                event.key,
-            )
+            [
+                "ArrowLeft",
+                "ArrowRight",
+                "Home",
+                "End",
+                "PageUp",
+                "PageDown",
+            ].includes(event.key)
         ) {
             this.hide();
             return;
@@ -255,12 +261,23 @@ class PromptAutocompleteController {
         }
 
         const tokenFragment = fullText.slice(start, cursor);
-        const query = normalizeQuery(tokenFragment);
-        if (!query) {
+        const artistMode = isArtistToken(tokenFragment);
+        const rawQuery = artistMode
+            ? tokenFragment.trimStart().slice(1)
+            : tokenFragment;
+        const query = normalizeQuery(rawQuery);
+        if (!artistMode && !query) {
             return null;
         }
 
-        return { start, end, query, tokenFragment };
+        return {
+            start,
+            end,
+            query,
+            tokenFragment,
+            artistMode,
+            markerPrefix: artistMode ? "@" : "",
+        };
     }
 
     async fetchAndRender() {
@@ -277,7 +294,14 @@ class PromptAutocompleteController {
         }
         this.abortController = new AbortController();
 
-        const url = `/yet_essential/autocomplete/search?q=${encodeURIComponent(tokenRange.query)}&limit=${SEARCH_LIMIT}`;
+        const params = new URLSearchParams({
+            q: tokenRange.query,
+            limit: String(SEARCH_LIMIT),
+        });
+        if (tokenRange.artistMode) {
+            params.set("category", "1");
+        }
+        const url = `/yet_essential/autocomplete/search?${params.toString()}`;
 
         let response;
         try {
@@ -453,7 +477,12 @@ class PromptAutocompleteController {
 
         const leadingWhitespace =
             tokenRange.tokenFragment.match(/^\s*/)?.[0] ?? "";
-        const replacement = `${leadingWhitespace}${insertText}${suffix}`;
+        const markerPrefix =
+            tokenRange.markerPrefix &&
+            !insertText.startsWith(tokenRange.markerPrefix)
+                ? tokenRange.markerPrefix
+                : "";
+        const replacement = `${leadingWhitespace}${markerPrefix}${insertText}${suffix}`;
 
         this.inputEl.value = `${before}${replacement}${after}`;
         const cursor = before.length + replacement.length;
@@ -524,10 +553,7 @@ class PromptAutocompleteController {
             Math.max(rawLeft, viewportPadding),
             window.innerWidth - width - viewportPadding,
         );
-        const top = Math.min(
-            Math.max(rawTop, viewportPadding),
-            maxTop,
-        );
+        const top = Math.min(Math.max(rawTop, viewportPadding), maxTop);
 
         this.dropdownEl.style.left = `${Math.round(left)}px`;
         this.dropdownEl.style.top = `${Math.round(top)}px`;
@@ -546,7 +572,8 @@ class PromptAutocompleteController {
         this.dropdownEl.style.visibility = "hidden";
         this.dropdownEl.style.display = "block";
         this.dropdownEl.style.width = `${Math.round(width)}px`;
-        const height = this.dropdownEl.offsetHeight || this.dropdownEl.scrollHeight;
+        const height =
+            this.dropdownEl.offsetHeight || this.dropdownEl.scrollHeight;
         this.dropdownEl.style.display = previousDisplay;
         this.dropdownEl.style.visibility = previousVisibility;
         this.dropdownEl.style.width = previousWidth;
@@ -683,14 +710,7 @@ function isTextInputElement(inputEl) {
     if (!inputEl) return false;
     if (inputEl instanceof HTMLTextAreaElement) return true;
     if (inputEl instanceof HTMLInputElement) {
-        const textTypes = [
-            "text",
-            "password",
-            "email",
-            "search",
-            "url",
-            "tel",
-        ];
+        const textTypes = ["text", "password", "email", "search", "url", "tel"];
         return textTypes.includes(inputEl.type) || !inputEl.type;
     }
     return false;
@@ -831,7 +851,6 @@ function attachPromptAutocomplete(inputEl) {
     const controller = new PromptAutocompleteController(inputEl);
     controllerMap.set(inputEl, controller);
     activeController = controller;
-
 }
 
 function getInputFromWidget(widget) {

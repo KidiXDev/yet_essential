@@ -39,7 +39,7 @@ A professional-grade post-processing system with stackable effects.
 
 ## 🧩 Compatibility
 
-- **Node 2.0 Support:** Fully compatible with ComfyUI Node 2.0 (V2 UI) features, working perfectly whether the new UI is **enabled or disabled**.
+- **Node 2.0 Support:** Fully compatible with ComfyUI Node 2.0.
 
 ## 📦 Installation
 

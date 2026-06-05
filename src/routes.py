@@ -10,6 +10,10 @@ async def search_autocomplete(request: web.Request) -> web.Response:
         requested_limit = int(request.query.get("limit", str(SETTINGS.limit)))
     except ValueError:
         requested_limit = SETTINGS.limit
+    try:
+        category = int(request.query.get("category", "").strip())
+    except ValueError:
+        category = None
 
     limit = min(requested_limit, SETTINGS.limit)
     return web.json_response(
@@ -27,7 +31,8 @@ async def search_autocomplete(request: web.Request) -> web.Response:
                 query=query,
                 limit=limit,
                 algorithm=SETTINGS.algorithm,
-                sort_mode=SETTINGS.sort_mode
+                sort_mode=SETTINGS.sort_mode,
+                category=category,
             ),
         }
     )
