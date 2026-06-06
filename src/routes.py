@@ -1,7 +1,7 @@
 import os
 from aiohttp import web
 from server import PromptServer
-from .core import BASE_DIR, SETTINGS, TAG_INDEX, MODEL_PREVIEW_MANAGER, WILDCARD_INDEX
+from .core import BASE_DIR, SETTINGS, TAG_INDEX, MODEL_PREVIEW_MANAGER, WILDCARD_INDEX, fetch_model_catalog
 
 @PromptServer.instance.routes.get("/yet_essential/autocomplete/search")
 async def search_autocomplete(request: web.Request) -> web.Response:
@@ -124,3 +124,36 @@ async def list_tags(request: web.Request) -> web.Response:
 
     files = [f.name for f in tag_dir.iterdir() if f.is_file() and f.suffix.lower() == ".csv"]
     return web.json_response(sorted(files))
+
+
+@PromptServer.instance.routes.post("/yet_essential/llm/models")
+async def get_llm_models(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+    except Exception:
+        return web.Response(status=400)
+
+    provider = str(data.get("provider", "")).strip()
+    base_url = str(data.get("base_url", "")).strip()
+    api_key = str(data.get("api_key", "")).strip()
+    try:
+        timeout = int(data.get("timeout", 60) or 60)
+    except ValueError:
+        timeout = 60
+
+    if not provider:
+        return web.Response(status=400)
+
+    try:
+        models = fetch_model_catalog(
+            provider=provider,
+            base_url=base_url,
+            api_key=api_key,
+            timeout=timeout,
+        )
+    except RuntimeError as err:
+        return web.json_response({"error": str(err)}, status=400)
+    except Exception as err:
+        return web.json_response({"error": f"Failed to fetch models: {err}"}, status=500)
+
+    return web.json_response({"models": models})

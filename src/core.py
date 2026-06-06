@@ -6,6 +6,7 @@ from .services import (
     ModelPreviewManager,
     Settings,
     TagAutocompleteIndex,
+    fetch_model_catalog,
     WildcardIndex,
     prompt_has_wildcards,
     slerp_noise,
@@ -34,6 +35,7 @@ __all__ = [
     "MODEL_PREVIEW_MANAGER",
     "WILDCARD_INDEX",
     "expand_prompt_wildcards",
+    "fetch_model_catalog",
     "prompt_has_wildcards",
     "slerp_noise",
 ]
