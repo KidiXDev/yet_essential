@@ -1,13 +1,10 @@
 import { app } from "../../scripts/app.js";
+import { findWidgetByName, refreshNodeLayout, removeWidget } from "./shared/widget_utils.js";
 
 const EXTENSION_NAME = "yet_essential.lora_stack_dynamic_widgets";
 const TARGET_NODE_NAMES = ["YELoraStack", "YELoraStackModel"];
 const SLOT_NONE = "None";
 const DEFAULT_STRENGTH = 1.0;
-
-function findWidgetByName(node, name) {
-    return node?.widgets?.find((widget) => widget?.name === name) || null;
-}
 
 function getSlotWidgetNames(node, index) {
     const names = [
@@ -28,16 +25,6 @@ function getSlotWidgets(node, index) {
     return getSlotWidgetNames(node, index)
         .map((name) => findWidgetByName(node, name))
         .filter(Boolean);
-}
-
-function removeWidget(node, widget) {
-    if (!node?.widgets || !widget) {
-        return;
-    }
-    const index = node.widgets.indexOf(widget);
-    if (index !== -1) {
-        node.widgets.splice(index, 1);
-    }
 }
 
 function countLoraRows(node) {
@@ -245,16 +232,6 @@ function applySavedRows(node, rows) {
             strengthClipWidget.value = row.strengthClip;
         }
     }
-}
-
-function refreshNodeLayout(node) {
-    if (!node || typeof node.computeSize !== "function") {
-        return;
-    }
-    const size = node.computeSize();
-    node.size[0] = Math.max(node.size[0], size[0]);
-    node.size[1] = size[1];
-    node.setDirtyCanvas(true, true);
 }
 
 function ensureButtonOrder(node) {

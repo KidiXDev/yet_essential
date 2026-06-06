@@ -1,4 +1,5 @@
 import { app } from "../../scripts/app.js";
+import { findWidgetByName, refreshNodeLayout, removeWidget } from "./shared/widget_utils.js";
 
 const EXTENSION_NAME = "yet_essential.empty_latent_dynamic_widgets";
 const TARGET_NODE_NAME = "YEEmptyLatentImage";
@@ -10,20 +11,6 @@ const SYNC_DELAYS_MS = [0, 60, 200, 600];
 const PRESET_WATCH_INTERVAL_MS = 250;
 
 const presetWatchers = new WeakMap();
-
-function findWidgetByName(node, name) {
-    return node?.widgets?.find((widget) => widget?.name === name) || null;
-}
-
-function removeWidget(node, widget) {
-    if (!node?.widgets || !widget) {
-        return;
-    }
-    const index = node.widgets.indexOf(widget);
-    if (index !== -1) {
-        node.widgets.splice(index, 1);
-    }
-}
 
 function captureTemplate(widget) {
     if (!widget) {
@@ -77,14 +64,6 @@ function shouldShowCustomDimensions(node) {
         normalizedPreset.length === 0 ||
         normalizedPreset === CUSTOM_PRESET_VALUE
     );
-}
-
-function refreshNodeLayout(node) {
-    if (!node || typeof node.computeSize !== "function") {
-        return;
-    }
-    node.setSize([node.size[0], node.computeSize()[1]]);
-    app.canvas.setDirty(true, true);
 }
 
 function insertBeforeBatch(node, widgets) {
