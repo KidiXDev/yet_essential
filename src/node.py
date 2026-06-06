@@ -1073,6 +1073,7 @@ class YELoraStack(io.ComfyNode):
         for idx in range(1, cls.MAX_SLOTS + 1):
             inputs.extend(
                 [
+                    io.Boolean.Input(f"enabled_{idx}", default=True),
                     io.Combo.Input(f"lora_name_{idx}", options=lora_options, default=cls.NONE_OPTION),
                     io.Float.Input(f"strength_model_{idx}", default=1.0, min=-20.0, max=20.0, step=0.01),
                     io.Float.Input(f"strength_clip_{idx}", default=1.0, min=-20.0, max=20.0, step=0.01),
@@ -1098,6 +1099,9 @@ class YELoraStack(io.ComfyNode):
         clip_out = clip
 
         for idx in range(1, cls.MAX_SLOTS + 1):
+            if not bool(kwargs.get(f"enabled_{idx}", True)):
+                continue
+
             lora_name = cls._slot_lora_name(kwargs.get(f"lora_name_{idx}"))
             if not lora_name:
                 continue
@@ -1135,6 +1139,7 @@ class YELoraStackModel(io.ComfyNode):
         for idx in range(1, cls.MAX_SLOTS + 1):
             inputs.extend(
                 [
+                    io.Boolean.Input(f"enabled_{idx}", default=True),
                     io.Combo.Input(f"lora_name_{idx}", options=lora_options, default=cls.NONE_OPTION),
                     io.Float.Input(f"strength_model_{idx}", default=1.0, min=-20.0, max=20.0, step=0.01),
                 ]
@@ -1158,6 +1163,9 @@ class YELoraStackModel(io.ComfyNode):
         model_out = model
 
         for idx in range(1, cls.MAX_SLOTS + 1):
+            if not bool(kwargs.get(f"enabled_{idx}", True)):
+                continue
+
             lora_name = cls._slot_lora_name(kwargs.get(f"lora_name_{idx}"))
             if not lora_name:
                 continue

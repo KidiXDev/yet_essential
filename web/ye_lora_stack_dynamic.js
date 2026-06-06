@@ -2,49 +2,248 @@ import { app } from "../../scripts/app.js";
 
 const EXTENSION_NAME = "yet_essential.lora_stack_dynamic_widgets";
 const TARGET_NODE_NAMES = ["YELoraStack", "YELoraStackModel"];
-const MAX_SLOTS = 25;
+const MAX_SLOTS = 8;
 const SLOT_NONE = "None";
-const SYNC_DELAYS_MS = [0, 60, 200, 600];
-const WATCH_INTERVAL_MS = 250;
-const IS_V2_FRONTEND = typeof window !== "undefined" && !!window.comfyAPI;
-const LEGACY_HIDDEN_TYPE = "ye_hidden";
-
-const originalWidgetProps = new WeakMap();
-const watchers = new WeakMap();
+const DEFAULT_STRENGTH = 1.0;
 
 function findWidgetByName(node, name) {
     return node?.widgets?.find((widget) => widget?.name === name) || null;
 }
 
-function toggleWidget(widget, show = false) {
+function getSlotWidgetNames(node, index) {
+    const names = [
+        `enabled_${index}`,
+        `lora_name_${index}`,
+        `strength_model_${index}`,
+    ];
+
+    const nodeName = node?.comfyClass || node?.type;
+    if (nodeName !== "YELoraStackModel") {
+        names.push(`strength_clip_${index}`);
+    }
+
+    return names;
+}
+
+function getSlotWidgets(node, index) {
+    return getSlotWidgetNames(node, index)
+        .map((name) => findWidgetByName(node, name))
+        .filter(Boolean);
+}
+
+function removeWidget(node, widget) {
+    if (!node?.widgets || !widget) {
+        return;
+    }
+    const index = node.widgets.indexOf(widget);
+    if (index !== -1) {
+        node.widgets.splice(index, 1);
+    }
+}
+
+function countLoraRows(node) {
+    let maxIndex = 0;
+    for (const widget of node?.widgets || []) {
+        const match = widget?.name?.match(/^lora_name_(\d+)$/);
+        if (match) {
+            maxIndex = Math.max(maxIndex, Number.parseInt(match[1], 10));
+        }
+    }
+    return maxIndex;
+}
+
+function captureTemplate(widget) {
     if (!widget) {
+        return null;
+    }
+    return {
+        type: widget.type,
+        value: widget.value,
+        callback: widget.callback || (() => {}),
+        options: widget.options ? { ...widget.options } : {},
+    };
+}
+
+function ensureTemplates(node) {
+    if (node.__yeLoraTemplates) {
+        return node.__yeLoraTemplates;
+    }
+
+    const templates = {
+        enabled: captureTemplate(findWidgetByName(node, "enabled_1")),
+        loraName: captureTemplate(findWidgetByName(node, "lora_name_1")),
+        strengthModel: captureTemplate(findWidgetByName(node, "strength_model_1")),
+        strengthClip: captureTemplate(findWidgetByName(node, "strength_clip_1")),
+    };
+
+    node.__yeLoraTemplates = templates;
+    return templates;
+}
+
+function hookNameWidget(node, widget) {
+    if (!widget || widget.__yeLoraSlotHooked) {
         return;
     }
 
-    if (!widget.options || typeof widget.options !== "object") {
-        widget.options = {};
-    }
-    widget.options.hidden = !show;
-    widget.hidden = !show;
+    widget.__yeLoraSlotHooked = true;
+    const originalCallback = widget.callback;
+    widget.callback = function patchedLoraNameCallback(value, ...args) {
+        const result = typeof originalCallback === "function"
+            ? originalCallback.call(this, value, ...args)
+            : undefined;
+        if (node.updateRemoveBtn) {
+            node.updateRemoveBtn();
+        }
+        return result;
+    };
+}
 
-    if (!originalWidgetProps.has(widget)) {
-        originalWidgetProps.set(widget, {
-            type: widget.type,
-            computeSize: widget.computeSize,
-            computedHeight: widget.computedHeight,
+function addToggleWidget(node, name, value, template) {
+    const options = template?.options ? { ...template.options } : {};
+    const callback = template?.callback || (() => {});
+    return node.addWidget(template?.type || "toggle", name, value, callback, options);
+}
+
+function addComboWidget(node, name, value, template) {
+    const options = template?.options ? { ...template.options } : {};
+    const callback = template?.callback || (() => {});
+    return node.addWidget("combo", name, value, callback, options);
+}
+
+function addNumberWidget(node, name, value, template) {
+    const options = template?.options ? { ...template.options } : {};
+    const callback = template?.callback || (() => {});
+    return node.addWidget("number", name, value, callback, options);
+}
+
+function addLoraRow(
+    node,
+    index,
+    {
+        enabled = true,
+        loraName = null,
+        strengthModel = DEFAULT_STRENGTH,
+        strengthClip = DEFAULT_STRENGTH,
+    } = {},
+) {
+    const templates = ensureTemplates(node);
+    const defaultLora = templates.loraName?.options?.values?.[0] ?? SLOT_NONE;
+
+    addToggleWidget(node, `enabled_${index}`, enabled, templates.enabled);
+    const combo = addComboWidget(
+        node,
+        `lora_name_${index}`,
+        loraName ?? defaultLora,
+        templates.loraName,
+    );
+    addNumberWidget(
+        node,
+        `strength_model_${index}`,
+        strengthModel,
+        templates.strengthModel,
+    );
+
+    const nodeName = node?.comfyClass || node?.type;
+    if (nodeName !== "YELoraStackModel") {
+        addNumberWidget(
+            node,
+            `strength_clip_${index}`,
+            strengthClip,
+            templates.strengthClip,
+        );
+    }
+
+    hookNameWidget(node, combo);
+}
+
+function clearSlotValues(node, index) {
+    const enabledWidget = findWidgetByName(node, `enabled_${index}`);
+    const nameWidget = findWidgetByName(node, `lora_name_${index}`);
+    const strengthModelWidget = findWidgetByName(node, `strength_model_${index}`);
+    const strengthClipWidget = findWidgetByName(node, `strength_clip_${index}`);
+
+    if (enabledWidget) {
+        enabledWidget.value = true;
+    }
+    if (nameWidget) {
+        nameWidget.value = SLOT_NONE;
+    }
+    if (strengthModelWidget) {
+        strengthModelWidget.value = DEFAULT_STRENGTH;
+    }
+    if (strengthClipWidget) {
+        strengthClipWidget.value = DEFAULT_STRENGTH;
+    }
+}
+
+function removeLoraRow(node, index) {
+    clearSlotValues(node, index);
+    for (const widget of getSlotWidgets(node, index)) {
+        removeWidget(node, widget);
+    }
+}
+
+function parseSavedSlots(node, values) {
+    const rows = [];
+    if (!Array.isArray(values)) {
+        return rows;
+    }
+
+    const chunkSize = (node?.comfyClass || node?.type) === "YELoraStackModel" ? 3 : 4;
+    for (let offset = 0; offset < values.length && rows.length < MAX_SLOTS; offset += 1) {
+        const enabled = values[offset];
+        const loraName = values[offset + 1];
+        const strengthModel = values[offset + 2];
+        const strengthClip = chunkSize === 4 ? values[offset + 3] : DEFAULT_STRENGTH;
+
+        const isChunkStart = typeof enabled === "boolean"
+            && typeof loraName === "string"
+            && typeof strengthModel === "number"
+            && (chunkSize === 3 || typeof strengthClip === "number");
+
+        if (!isChunkStart) {
+            continue;
+        }
+
+        rows.push({
+            enabled,
+            loraName,
+            strengthModel,
+            strengthClip: chunkSize === 4 ? strengthClip : DEFAULT_STRENGTH,
         });
+
+        offset += chunkSize - 1;
     }
 
-    const original = originalWidgetProps.get(widget);
-    if (!IS_V2_FRONTEND) {
-        if (show) {
-            widget.type = original.type;
-            widget.computeSize = original.computeSize;
-            widget.computedHeight = original.computedHeight;
-        } else {
-            widget.type = LEGACY_HIDDEN_TYPE;
-            widget.computeSize = () => [0, -4];
-            widget.computedHeight = 0;
+    return rows;
+}
+
+function ensureLoraRows(node, count) {
+    for (let index = countLoraRows(node) + 1; index <= count; index += 1) {
+        addLoraRow(node, index);
+    }
+}
+
+function applySavedRows(node, rows) {
+    for (let i = 0; i < rows.length; i += 1) {
+        const index = i + 1;
+        const row = rows[i];
+        const enabledWidget = findWidgetByName(node, `enabled_${index}`);
+        const nameWidget = findWidgetByName(node, `lora_name_${index}`);
+        const strengthModelWidget = findWidgetByName(node, `strength_model_${index}`);
+        const strengthClipWidget = findWidgetByName(node, `strength_clip_${index}`);
+
+        if (enabledWidget) {
+            enabledWidget.value = row.enabled;
+        }
+        if (nameWidget) {
+            nameWidget.value = row.loraName;
+        }
+        if (strengthModelWidget) {
+            strengthModelWidget.value = row.strengthModel;
+        }
+        if (strengthClipWidget) {
+            strengthClipWidget.value = row.strengthClip;
         }
     }
 }
@@ -53,102 +252,102 @@ function refreshNodeLayout(node) {
     if (!node || typeof node.computeSize !== "function") {
         return;
     }
-    node.setSize([node.size[0], node.computeSize()[1]]);
-    app.canvas.setDirty(true, true);
+    const size = node.computeSize();
+    node.size[0] = Math.max(node.size[0], size[0]);
+    node.size[1] = size[1];
+    node.setDirtyCanvas(true, true);
 }
 
-function slotIsFilled(node, idx) {
-    const widget = findWidgetByName(node, `lora_name_${idx}`);
-    if (!widget) {
-        return false;
+function ensureButtonOrder(node) {
+    const addBtn = node.__yeAddLoraButton;
+    const removeBtn = node.__yeRemoveLoraButton;
+
+    if (!addBtn) {
+        return;
     }
-    const value = String(widget.value ?? "").trim();
-    return value.length > 0 && value !== SLOT_NONE;
+
+    removeWidget(node, addBtn);
+    node.widgets.unshift(addBtn);
+
+    if (removeBtn) {
+        removeWidget(node, removeBtn);
+        node.widgets.push(removeBtn);
+    }
 }
 
-function computeVisibleSlots(node) {
-    let lastFilled = 0;
-    for (let idx = 1; idx <= MAX_SLOTS; idx += 1) {
-        if (slotIsFilled(node, idx)) {
-            lastFilled = idx;
+function removeInitialExtraRows(node) {
+    for (let index = MAX_SLOTS; index >= 2; index -= 1) {
+        for (const widget of getSlotWidgets(node, index)) {
+            removeWidget(node, widget);
         }
     }
-    return Math.min(MAX_SLOTS, Math.max(1, lastFilled + 1));
 }
 
-function updateSlotVisibility(node) {
-    const visibleSlots = computeVisibleSlots(node);
-    const nodeName = node?.comfyClass || node?.type;
-    const isModelOnly = nodeName === "YELoraStackModel";
-    for (let idx = 1; idx <= MAX_SLOTS; idx += 1) {
-        const show = idx <= visibleSlots;
-        toggleWidget(findWidgetByName(node, `lora_name_${idx}`), show);
-        toggleWidget(findWidgetByName(node, `strength_model_${idx}`), show);
-        if (!isModelOnly) {
-            toggleWidget(findWidgetByName(node, `strength_clip_${idx}`), show);
-        }
+function ensureButtons(node) {
+    if (!node.__yeAddLoraButton) {
+        const addBtn = node.addWidget("button", "Add LoRA", "Add LoRA", () => {
+            const nextIndex = countLoraRows(node) + 1;
+            if (nextIndex > MAX_SLOTS) {
+                return;
+            }
+            addLoraRow(node, nextIndex);
+            node.updateRemoveBtn?.();
+            refreshNodeLayout(node);
+        });
+        addBtn.serialize = false;
+        node.__yeAddLoraButton = addBtn;
     }
-    refreshNodeLayout(node);
-}
 
-function scheduleSyncPasses(node) {
-    for (const delay of SYNC_DELAYS_MS) {
-        window.setTimeout(() => updateSlotVisibility(node), delay);
+    if (!node.__yeRemoveLoraButton) {
+        const removeBtn = node.addWidget("button", "Remove LoRA", "Remove LoRA", () => {
+            const maxIndex = countLoraRows(node);
+            if (maxIndex <= 1) {
+                return;
+            }
+            removeLoraRow(node, maxIndex);
+            node.updateRemoveBtn?.();
+            refreshNodeLayout(node);
+        });
+        removeBtn.serialize = false;
+        node.__yeRemoveLoraButton = removeBtn;
     }
 }
 
 function hookLoraStackNode(node) {
     if (!node || node.__yeLoraStackHooked) {
-        scheduleSyncPasses(node);
-        ensureWatcher(node);
-        return;
-    }
-    node.__yeLoraStackHooked = true;
-
-    for (let idx = 1; idx <= MAX_SLOTS; idx += 1) {
-        const nameWidget = findWidgetByName(node, `lora_name_${idx}`);
-        if (!nameWidget || nameWidget.__yeLoraSlotHooked) {
-            continue;
+        if (node?.updateRemoveBtn) {
+            node.updateRemoveBtn();
+            refreshNodeLayout(node);
         }
-        nameWidget.__yeLoraSlotHooked = true;
-        const originalCallback = nameWidget.callback;
-        nameWidget.callback = function patchedLoraNameCallback(value, ...args) {
-            const result = typeof originalCallback === "function"
-                ? originalCallback.call(this, value, ...args)
-                : undefined;
-            updateSlotVisibility(node);
-            return result;
-        };
-    }
-
-    scheduleSyncPasses(node);
-    ensureWatcher(node);
-}
-
-function ensureWatcher(node) {
-    if (watchers.has(node)) {
         return;
     }
-    const timer = window.setInterval(() => {
-        if (!node || !node.graph) {
-            window.clearInterval(timer);
-            watchers.delete(node);
+
+    node.__yeLoraStackHooked = true;
+    ensureTemplates(node);
+    hookNameWidget(node, findWidgetByName(node, "lora_name_1"));
+    removeInitialExtraRows(node);
+
+    node.updateRemoveBtn = () => {
+        const rowCount = countLoraRows(node);
+        const removeBtn = node.__yeRemoveLoraButton;
+        if (!removeBtn) {
             return;
         }
 
-        let stateKey = "";
-        for (let idx = 1; idx <= MAX_SLOTS; idx += 1) {
-            const value = findWidgetByName(node, `lora_name_${idx}`)?.value;
-            stateKey += `|${idx}:${String(value ?? "")}`;
+        if (rowCount > 1) {
+            if (!node.widgets.includes(removeBtn)) {
+                node.widgets.push(removeBtn);
+            }
+        } else {
+            removeWidget(node, removeBtn);
         }
 
-        if (node.__yeLoraStackStateKey !== stateKey) {
-            node.__yeLoraStackStateKey = stateKey;
-            updateSlotVisibility(node);
-        }
-    }, WATCH_INTERVAL_MS);
+        ensureButtonOrder(node);
+    };
 
-    watchers.set(node, timer);
+    ensureButtons(node);
+    node.updateRemoveBtn();
+    refreshNodeLayout(node);
 }
 
 app.registerExtension({
@@ -170,16 +369,6 @@ app.registerExtension({
             return;
         }
 
-        const originalOnWidgetChanged = nodeType.prototype.onWidgetChanged;
-        nodeType.prototype.onWidgetChanged = function patchedOnWidgetChanged() {
-            const result = originalOnWidgetChanged?.apply(this, arguments);
-            const [name] = arguments;
-            if (typeof name === "string" && name.startsWith("lora_name_")) {
-                scheduleSyncPasses(this);
-            }
-            return result;
-        };
-
         const originalOnNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function patchedOnNodeCreated() {
             const result = originalOnNodeCreated?.apply(this, arguments);
@@ -188,9 +377,21 @@ app.registerExtension({
         };
 
         const originalOnConfigure = nodeType.prototype.onConfigure;
-        nodeType.prototype.onConfigure = function patchedOnConfigure() {
+        nodeType.prototype.onConfigure = function patchedOnConfigure(info) {
+            const savedRows = parseSavedSlots(this, info?.widgets_values);
+            const requiredRows = Math.max(1, savedRows.length);
+
+            if (info?.widgets_values) {
+                ensureLoraRows(this, requiredRows);
+                this.updateRemoveBtn?.();
+            }
+
             const result = originalOnConfigure?.apply(this, arguments);
-            hookLoraStackNode(this);
+            applySavedRows(this, savedRows);
+            this.__yeAddLoraButton && (this.__yeAddLoraButton.value = "Add LoRA");
+            this.__yeRemoveLoraButton && (this.__yeRemoveLoraButton.value = "Remove LoRA");
+            this.updateRemoveBtn?.();
+            refreshNodeLayout(this);
             return result;
         };
     },
