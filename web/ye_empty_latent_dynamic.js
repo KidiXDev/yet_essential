@@ -3,60 +3,80 @@ import { app } from "../../scripts/app.js";
 const EXTENSION_NAME = "yet_essential.empty_latent_dynamic_widgets";
 const TARGET_NODE_NAME = "YEEmptyLatentImage";
 const PRESET_WIDGET_NAME = "preset";
+const BATCH_WIDGET_NAME = "batch_size";
 const CUSTOM_PRESET_VALUE = "Custom";
 const DYNAMIC_WIDGET_NAMES = ["width", "height"];
 const SYNC_DELAYS_MS = [0, 60, 200, 600];
 const PRESET_WATCH_INTERVAL_MS = 250;
-const LEGACY_HIDDEN_TYPE = "ye_hidden";
-const IS_V2_FRONTEND = typeof window !== "undefined" && !!window.comfyAPI; // Compability support for Node 2.0
 
-const originalWidgetProps = new WeakMap();
 const presetWatchers = new WeakMap();
 
 function findWidgetByName(node, name) {
     return node?.widgets?.find((widget) => widget?.name === name) || null;
 }
 
-function toggleWidget(node, widget, show = false) {
-    if (!widget) {
+function removeWidget(node, widget) {
+    if (!node?.widgets || !widget) {
         return;
     }
-
-    // Node 2.0 (Vue) reads visibility from widget options/state.
-    if (!widget.options || typeof widget.options !== "object") {
-        widget.options = {};
+    const index = node.widgets.indexOf(widget);
+    if (index !== -1) {
+        node.widgets.splice(index, 1);
     }
-    widget.options.hidden = !show;
-    widget.hidden = !show;
+}
 
-    if (!originalWidgetProps.has(widget)) {
-        originalWidgetProps.set(widget, {
-            type: widget.type,
-            computeSize: widget.computeSize,
-            computedHeight: widget.computedHeight,
-        });
+function captureTemplate(widget) {
+    if (!widget) {
+        return null;
     }
+    return {
+        type: widget.type,
+        value: widget.value,
+        callback: widget.callback || (() => {}),
+        options: widget.options ? { ...widget.options } : {},
+    };
+}
 
-    const original = originalWidgetProps.get(widget);
-    // Legacy frontend path: hide via widget type + size.
-    // Vue frontend path: avoid type swapping because it can create hidden-but-clickable ghost rows.
-    if (!IS_V2_FRONTEND) {
-        if (show) {
-            widget.type = original.type;
-            widget.computeSize = original.computeSize;
-            widget.computedHeight = original.computedHeight;
-        } else {
-            widget.type = LEGACY_HIDDEN_TYPE;
-            widget.computeSize = () => [0, -4];
-            widget.computedHeight = 0;
-        }
+function ensureTemplates(node) {
+    if (node.__yeEmptyLatentTemplates) {
+        return node.__yeEmptyLatentTemplates;
     }
 
-    if (Array.isArray(widget.linkedWidgets)) {
-        for (const linkedWidget of widget.linkedWidgets) {
-            toggleWidget(node, linkedWidget, show);
-        }
+    node.__yeEmptyLatentTemplates = {
+        width: captureTemplate(findWidgetByName(node, "width")),
+        height: captureTemplate(findWidgetByName(node, "height")),
+    };
+    return node.__yeEmptyLatentTemplates;
+}
+
+function ensureDimensionValues(node) {
+    if (!node.__yeDimensionValues) {
+        const templates = ensureTemplates(node);
+        node.__yeDimensionValues = {
+            width: findWidgetByName(node, "width")?.value ?? templates.width?.value ?? 1024,
+            height: findWidgetByName(node, "height")?.value ?? templates.height?.value ?? 1024,
+        };
     }
+    return node.__yeDimensionValues;
+}
+
+function shouldShowCustomDimensions(node) {
+    const presetWidget = findWidgetByName(node, PRESET_WIDGET_NAME);
+    if (!presetWidget) {
+        return true;
+    }
+
+    const rawPresetValue = presetWidget.value;
+    const presetValue =
+        typeof rawPresetValue === "string"
+            ? rawPresetValue
+            : String(rawPresetValue ?? "");
+    const normalizedPreset = presetValue.trim();
+    return (
+        rawPresetValue == null ||
+        normalizedPreset.length === 0 ||
+        normalizedPreset === CUSTOM_PRESET_VALUE
+    );
 }
 
 function refreshNodeLayout(node) {
@@ -67,28 +87,74 @@ function refreshNodeLayout(node) {
     app.canvas.setDirty(true, true);
 }
 
-function updatePresetWidgets(node) {
-    const presetWidget = findWidgetByName(node, PRESET_WIDGET_NAME);
-    if (!presetWidget) {
+function insertBeforeBatch(node, widgets) {
+    const batchWidget = findWidgetByName(node, BATCH_WIDGET_NAME);
+    if (!batchWidget) {
         return;
     }
 
-    const rawPresetValue = presetWidget.value;
-    const presetValue =
-        typeof rawPresetValue === "string"
-            ? rawPresetValue
-            : String(rawPresetValue ?? "");
-    const normalizedPreset = presetValue.trim();
-    const showCustomDimensions =
-        rawPresetValue == null ||
-        normalizedPreset.length === 0 ||
-        normalizedPreset === CUSTOM_PRESET_VALUE;
-    for (const widgetName of DYNAMIC_WIDGET_NAMES) {
-        toggleWidget(
-            node,
-            findWidgetByName(node, widgetName),
-            showCustomDimensions,
-        );
+    const batchIndex = node.widgets.indexOf(batchWidget);
+    if (batchIndex === -1) {
+        return;
+    }
+
+    for (const widget of widgets) {
+        removeWidget(node, widget);
+    }
+
+    node.widgets.splice(batchIndex, 0, ...widgets);
+}
+
+function addDimensionWidget(node, name, value, template) {
+    const options = template?.options ? { ...template.options } : {};
+    const callback = template?.callback || (() => {});
+    return node.addWidget(template?.type || "number", name, value, callback, options);
+}
+
+function removeDimensions(node) {
+    const values = ensureDimensionValues(node);
+    const widthWidget = findWidgetByName(node, "width");
+    const heightWidget = findWidgetByName(node, "height");
+
+    if (widthWidget) {
+        values.width = widthWidget.value;
+        removeWidget(node, widthWidget);
+    }
+    if (heightWidget) {
+        values.height = heightWidget.value;
+        removeWidget(node, heightWidget);
+    }
+}
+
+function addDimensions(node) {
+    const templates = ensureTemplates(node);
+    const values = ensureDimensionValues(node);
+    const created = [];
+
+    if (!findWidgetByName(node, "width")) {
+        created.push(addDimensionWidget(node, "width", values.width, templates.width));
+    }
+    if (!findWidgetByName(node, "height")) {
+        created.push(addDimensionWidget(node, "height", values.height, templates.height));
+    }
+
+    if (created.length > 0) {
+        insertBeforeBatch(node, created);
+    }
+}
+
+function dimensionsMatchDesiredState(node) {
+    const shouldShow = shouldShowCustomDimensions(node);
+    const hasWidth = !!findWidgetByName(node, "width");
+    const hasHeight = !!findWidgetByName(node, "height");
+    return shouldShow ? hasWidth && hasHeight : !hasWidth && !hasHeight;
+}
+
+function updatePresetWidgets(node) {
+    if (shouldShowCustomDimensions(node)) {
+        addDimensions(node);
+    } else {
+        removeDimensions(node);
     }
 
     refreshNodeLayout(node);
@@ -101,7 +167,10 @@ function hookPresetWidget(node) {
         ensurePresetWatcher(node);
         return;
     }
+
     presetWidget.__yeDynamicHooked = true;
+    ensureTemplates(node);
+    ensureDimensionValues(node);
 
     const originalCallback = presetWidget.callback;
     presetWidget.callback = function patchedPresetCallback(value, ...args) {
@@ -129,22 +198,29 @@ function ensurePresetWatcher(node) {
     if (presetWatchers.has(node)) {
         return;
     }
+
     const timer = window.setInterval(() => {
         if (!node || !node.graph) {
             window.clearInterval(timer);
             presetWatchers.delete(node);
             return;
         }
+
         const presetWidget = findWidgetByName(node, PRESET_WIDGET_NAME);
         if (!presetWidget) {
             return;
         }
+
         const currentValue = String(presetWidget.value ?? "");
-        if (node.__yeLastPresetValue !== currentValue) {
+        if (
+            node.__yeLastPresetValue !== currentValue ||
+            !dimensionsMatchDesiredState(node)
+        ) {
             node.__yeLastPresetValue = currentValue;
             updatePresetWidgets(node);
         }
     }, PRESET_WATCH_INTERVAL_MS);
+
     presetWatchers.set(node, timer);
 }
 
