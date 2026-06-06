@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
+import re
 from comfy_api.latest import io
 
+from ..core import BASE_DIR
 from ..services.llm import LLMClient, make_provider_config
 from .common import (
     YELLMConfigValue,
@@ -17,6 +20,87 @@ from .common import (
     read_llm_pipe_value,
     read_llm_provider_value,
 )
+
+
+DEFAULT_PROMPTS = {
+    "Prompt Creator (Flux/SDXL)": (
+        "You are an expert Text-to-Image Prompt Generator specializing in modern models like Flux and SDXL.\n"
+        "Your task is to take a simple user concept and expand it into a detailed, descriptive, and visually rich image prompt.\n\n"
+        "### CRITICAL RULES - ZERO CONVERSATION:\n"
+        "- Do NOT include any introduction, preamble, or greeting (e.g. do not say \"Here is your prompt:\", \"Sure, I can help with that\", etc.).\n"
+        "- Do NOT wrap the prompt in markdown code blocks (e.g. do not write ``` or ```text).\n"
+        "- Do NOT add any trailing explanations, notes, or meta-comments at the end.\n"
+        "- Output ONLY the raw final prompt text. Absolutely nothing else is allowed in your response.\n\n"
+        "### Guidelines:\n"
+        "- Describe the subject in vivid detail (features, clothing, action, pose, expression, age, ethnicity).\n"
+        "- Describe the environment, setting, atmosphere, lighting, and time of day.\n"
+        "- Specify style (e.g., hyperrealistic photography, digital painting, cinematic still, volumetric rendering).\n"
+        "- Define camera angle, framing, and composition (e.g., close-up, wide-angle, shallow depth of field).\n"
+        "- Avoid abstract quality buzzwords; instead describe details concretely (e.g., 'fine fabric texture', 'diffused natural light', 'intricate skin pores')."
+    ),
+    "Booru Tag Prompt Creator": (
+        "You are an expert Anime Image Prompt Generator specializing in Danbooru/Booru-style tags for anime text-to-image models (such as Pony Diffusion, NovelAI, and Anything).\n"
+        "Your task is to convert a user description or concept into a comprehensive list of comma-separated tags.\n\n"
+        "### CRITICAL RULES - ZERO CONVERSATION:\n"
+        "- Do NOT include any introduction, preamble, or greeting (e.g. do not say \"Here are the tags:\", \"Sure!\", etc.).\n"
+        "- Do NOT wrap the tags in markdown code blocks (e.g. do not write ``` or ```text).\n"
+        "- Do NOT add any trailing explanations, notes, or comments.\n"
+        "- Output ONLY the raw comma-separated tags. Absolutely nothing else is allowed in your response.\n\n"
+        "### Tag Formatting Guidelines:\n"
+        "- Start with standard quality/character tags (e.g., 'score_9, score_8_up, score_7_up, 1girl, solo').\n"
+        "- Describe hair (color, style), eyes (color, expression), facial features, and expression.\n"
+        "- Detail the outfit (clothing, accessories, footwear, socks).\n"
+        "- Describe pose, action, and camera perspective (e.g., 'looking at viewer, sitting, upper body, from below').\n"
+        "- Specify background, environment, and aesthetic modifiers.\n"
+        "- Keep the tags separated by commas and use lowercase."
+    ),
+    "Prompt Enhancer": (
+        "You are an advanced Text-to-Image Prompt Enhancer. Your goal is to refine and expand a given user prompt to make it visually stunning, compositionally sound, and highly effective for generative models.\n"
+        "You must analyze the user's input, keep the core subjects and actions, and embellish the prompt with details about medium, lighting, camera shot type, composition, textures, and atmosphere.\n\n"
+        "### CRITICAL RULES - ZERO CONVERSATION:\n"
+        "- Do NOT include any introduction, preamble, or greeting (e.g. do not say \"Here is the enhanced prompt:\", etc.).\n"
+        "- Do NOT wrap the prompt in markdown code blocks (e.g. do not write ``` or ```text).\n"
+        "- Do NOT add any trailing explanations, notes, or comments (e.g. do not explain what details you added).\n"
+        "- Output ONLY the raw enhanced prompt. Absolutely nothing else is allowed in your response.\n\n"
+        "### Rules:\n"
+        "- Retain the exact original meaning and core subject.\n"
+        "- Do not use empty words like 'photorealistic', 'ultra detailed', etc. Instead, describe textures, materials, and lighting details."
+    ),
+    "Cinematic Scene Builder": (
+        "You are a cinematic director and lighting expert. Your job is to take a basic scene description and convert it into a highly detailed cinematic film still prompt.\n"
+        "Focus on camera specifications (e.g., 'shot on 35mm lens', 'Panavision anamorphic'), lighting (e.g., 'dramatic key light', 'rim light', 'high-contrast shadows'), color grading (e.g., 'teal and orange color grade', 'muted earthy tones'), and atmosphere (e.g., 'hazy dust particles', 'volumetric fog').\n\n"
+        "### CRITICAL RULES - ZERO CONVERSATION:\n"
+        "- Do NOT include any introduction, preamble, or greeting (e.g. do not say \"Here is your cinematic scene:\", etc.).\n"
+        "- Do NOT wrap the prompt in markdown code blocks (e.g. do not write ``` or ```text).\n"
+        "- Do NOT add any trailing explanations, notes, or comments.\n"
+        "- Output ONLY the raw cinematic prompt. Absolutely nothing else is allowed in your response."
+    )
+}
+
+
+def load_prompt_templates() -> dict[str, str]:
+    path = BASE_DIR / "config" / "prompt.json"
+    
+    if not path.parent.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        
+    if not path.exists():
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(DEFAULT_PROMPTS, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            print(f"Error writing default prompts: {e}")
+        return DEFAULT_PROMPTS
+        
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, dict):
+                return {str(k): str(v) for k, v in data.items()}
+    except Exception as e:
+        print(f"Error loading prompt templates from {path}: {e}")
+        
+    return DEFAULT_PROMPTS
 
 
 def _normalize_stop_sequences(stop: str) -> list[str]:
@@ -53,7 +137,10 @@ def _execute_chat(
         presence_penalty=generation_config["presence_penalty"],
         frequency_penalty=generation_config["frequency_penalty"],
     )
-    return response["text"]
+    text = response.get("text", "")
+    # Remove <think>...</think> blocks (including unclosed reasoning blocks if cut off)
+    text = re.sub(r"<think>.*?(?:</think>|$)", "", text, flags=re.DOTALL)
+    return text.strip()
 
 
 class YELLMProvider(io.ComfyNode):
@@ -257,31 +344,6 @@ class YELLMCombineMessages(io.ComfyNode):
             combined.extend(_extract_messages(message_value))
         return io.NodeOutput(make_llm_message_value(messages=combined))
 
-
-class YELLMChatMessage(io.ComfyNode):
-    ROLES = ["system", "user", "assistant"]
-
-    @classmethod
-    def define_schema(cls) -> io.Schema:
-        return io.Schema(
-            node_id="YELLMChatMessage",
-            display_name="YE LLM Chat Message",
-            category="yet_essential/llm",
-            inputs=[
-                io.Combo.Input("role", options=cls.ROLES, default="user"),
-                io.String.Input("content", default="", multiline=True, dynamic_prompts=True),
-            ],
-            outputs=[YELLMMessageValue.Output(display_name="llm_message")],
-        )
-
-    @classmethod
-    def execute(cls, role: str, content: str) -> io.NodeOutput:
-        message = make_llm_message_value(role=role, content=content)
-        if not _extract_messages(message):
-            raise RuntimeError("YELLMChatMessage: content cannot be empty.")
-        return io.NodeOutput(message)
-
-
 class YECallLLM(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -341,13 +403,44 @@ class YECallLLMAdvance(io.ComfyNode):
         return io.NodeOutput(_execute_chat(pipe, messages, generation_config))
 
 
+class YELLMTemplatePrompt(io.ComfyNode):
+    ROLES = ["system", "user", "assistant"]
+
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        templates_dict = load_prompt_templates()
+        template_keys = list(templates_dict.keys()) if templates_dict else ["Prompt Creator (Flux/SDXL)"]
+        return io.Schema(
+            node_id="YELLMTemplatePrompt",
+            display_name="YE LLM Template Prompt",
+            category="yet_essential/llm",
+            inputs=[
+                io.Combo.Input("role", options=cls.ROLES, default="system"),
+                io.Combo.Input("template", options=template_keys, default=template_keys[0]),
+            ],
+            outputs=[
+                YELLMMessageValue.Output(display_name="llm_message"),
+                io.String.Output(display_name="text"),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, role: str, template: str) -> io.NodeOutput:
+        templates_dict = load_prompt_templates()
+        template_content = templates_dict.get(template, "")
+        
+        prompt_text = template_content.strip()
+        message = make_llm_message_value(role=role, content=prompt_text)
+        return io.NodeOutput(message, prompt_text)
+
+
 NODE_LIST = [
     YELLMProvider,
     YELLMConfig,
     YELLMPipeline,
     YELLMMessage,
     YELLMCombineMessages,
-    YELLMChatMessage,
     YECallLLM,
     YECallLLMAdvance,
+    YELLMTemplatePrompt,
 ]
