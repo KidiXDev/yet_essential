@@ -22,7 +22,7 @@ from spandrel import ImageModelDescriptor, ModelLoader
 
 from comfy_api.latest import ComfyExtension, io
 
-from .core import BASE_DIR, slerp_noise
+from .core import BASE_DIR, expand_prompt_wildcards, prompt_has_wildcards, slerp_noise
 
 
 YEPostFXPipe = io.Custom("YE_POSTFX_PIPE")
@@ -86,7 +86,14 @@ class YEPrompt(io.ComfyNode):
         )
 
     @classmethod
+    def IS_CHANGED(cls, prompt: str):
+        if prompt_has_wildcards(prompt):
+            return float("nan")
+        return prompt
+
+    @classmethod
     def execute(cls, prompt: str) -> io.NodeOutput:
+        prompt = expand_prompt_wildcards(prompt)
         prompt = _format_prompt_text(prompt)
         return io.NodeOutput(prompt, _make_prompt_value(prompt))
 
@@ -110,12 +117,20 @@ class YEClipTextEncodePrompt(io.ComfyNode):
         )
 
     @classmethod
+    def IS_CHANGED(cls, clip, prompt: str, format_prompt: bool):
+        if prompt_has_wildcards(prompt):
+            return float("nan")
+        return (id(clip), prompt, bool(format_prompt))
+
+    @classmethod
     def execute(cls, clip, prompt: str, format_prompt: bool) -> io.NodeOutput:
         if clip is None:
             raise RuntimeError(
                 "YEClipTextEncodePrompt: clip input is invalid (None). "
                 "Ensure your checkpoint/model loader outputs a valid CLIP."
             )
+
+        prompt = expand_prompt_wildcards(prompt)
 
         if format_prompt:
             prompt = _format_prompt_text(prompt)

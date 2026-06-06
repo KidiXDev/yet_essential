@@ -1,11 +1,12 @@
 import os
 from aiohttp import web
 from server import PromptServer
-from .core import BASE_DIR, SETTINGS, TAG_INDEX, MODEL_PREVIEW_MANAGER
+from .core import BASE_DIR, SETTINGS, TAG_INDEX, MODEL_PREVIEW_MANAGER, WILDCARD_INDEX
 
 @PromptServer.instance.routes.get("/yet_essential/autocomplete/search")
 async def search_autocomplete(request: web.Request) -> web.Response:
     query = request.query.get("q", "")
+    mode = request.query.get("mode", "").strip().lower()
     try:
         requested_limit = int(request.query.get("limit", str(SETTINGS.limit)))
     except ValueError:
@@ -15,10 +16,22 @@ async def search_autocomplete(request: web.Request) -> web.Response:
     except ValueError:
         category = None
 
-    limit = min(requested_limit, SETTINGS.limit)
+    limit = min(requested_limit, 200) if mode == "wildcard" else min(requested_limit, SETTINGS.limit)
+    items = (
+        WILDCARD_INDEX.search(query=query, limit=limit)
+        if mode == "wildcard"
+        else TAG_INDEX.search(
+            query=query,
+            limit=limit,
+            algorithm=SETTINGS.algorithm,
+            sort_mode=SETTINGS.sort_mode,
+            category=category,
+        )
+    )
     return web.json_response(
         {
             "query": query,
+            "mode": mode or "tag",
             "settings": {
                 "show_post_count": SETTINGS.show_post_count,
                 "spacing_mode": SETTINGS.spacing_mode,
@@ -27,13 +40,7 @@ async def search_autocomplete(request: web.Request) -> web.Response:
                 "escape_parentheses": SETTINGS.escape_parentheses,
                 "autocomplete_position": SETTINGS.autocomplete_position,
             },
-            "items": TAG_INDEX.search(
-                query=query,
-                limit=limit,
-                algorithm=SETTINGS.algorithm,
-                sort_mode=SETTINGS.sort_mode,
-                category=category,
-            ),
+            "items": items,
         }
     )
 

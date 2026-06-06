@@ -80,6 +80,10 @@ function isArtistToken(value) {
     return value.trimStart().startsWith("@");
 }
 
+function isWildcardToken(value) {
+    return value.trimStart().startsWith("$");
+}
+
 function formatCount(num) {
     if (num >= 1000000)
         return (num / 1000000).toFixed(1).replace(/\.0$/, "") + "m";
@@ -262,11 +266,14 @@ class PromptAutocompleteController {
 
         const tokenFragment = fullText.slice(start, cursor);
         const artistMode = isArtistToken(tokenFragment);
+        const wildcardMode = isWildcardToken(tokenFragment);
         const rawQuery = artistMode
             ? tokenFragment.trimStart().slice(1)
-            : tokenFragment;
+            : wildcardMode
+              ? tokenFragment.trimStart().slice(1)
+              : tokenFragment;
         const query = normalizeQuery(rawQuery);
-        if (!artistMode && !query) {
+        if (!artistMode && !wildcardMode && !query) {
             return null;
         }
 
@@ -276,6 +283,7 @@ class PromptAutocompleteController {
             query,
             tokenFragment,
             artistMode,
+            wildcardMode,
             markerPrefix: artistMode ? "@" : "",
         };
     }
@@ -300,6 +308,9 @@ class PromptAutocompleteController {
         });
         if (tokenRange.artistMode) {
             params.set("category", "1");
+        }
+        if (tokenRange.wildcardMode) {
+            params.set("mode", "wildcard");
         }
         const url = `/yet_essential/autocomplete/search?${params.toString()}`;
 
@@ -365,6 +376,9 @@ class PromptAutocompleteController {
 
             const title = item.label || item.tag || item.insert_text || "";
             const categoryName =
+                typeof item.category === "string"
+                    ? item.category
+                    :
                 categoryMap[item.category] ||
                 (Number.isFinite(item.category)
                     ? `Other (${item.category})`
@@ -446,12 +460,14 @@ class PromptAutocompleteController {
             return;
         }
 
+        const isWildcardItem = item.kind === "wildcard";
+
         // Apply transformations based on settings
-        if (this.settings.spacing_mode === "space") {
+        if (!isWildcardItem && this.settings.spacing_mode === "space") {
             insertText = insertText.replaceAll("_", " ");
         }
 
-        if (this.settings.escape_parentheses) {
+        if (!isWildcardItem && this.settings.escape_parentheses) {
             insertText = insertText
                 .replaceAll("(", "\\(")
                 .replaceAll(")", "\\)");
