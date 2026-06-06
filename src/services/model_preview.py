@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import sqlite3
 import threading
 from pathlib import Path
 from typing import Any
@@ -14,8 +16,12 @@ class ModelPreviewManager:
         self._cache: dict[str, str | None] = {}
         self._lock = threading.Lock()
         self._supported_exts = [".png", ".jpg", ".jpeg", ".webp"]
-        self._thumb_dir = base_dir / "cache" / "thumbnails"
+        self._cache_dir = base_dir / "cache"
+        self._cache_dir.mkdir(parents=True, exist_ok=True)
+        self._thumb_dir = self._cache_dir / "thumbnails"
         self._thumb_dir.mkdir(parents=True, exist_ok=True)
+        self._thumb_db_path = self._cache_dir / "thumb.db"
+        self._init_thumb_db()
 
     def find_preview(self, folder_type: str, model_name: str, res: int | None = None) -> str | None:
         cache_key = f"{folder_type}:{model_name}"
@@ -37,14 +43,53 @@ class ModelPreviewManager:
             self._cache[cache_key] = preview_path
         return preview_path
 
+    def _init_thumb_db(self) -> None:
+        with sqlite3.connect(self._thumb_db_path) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            columns = {
+                row[1]: row[2]
+                for row in conn.execute("PRAGMA table_info(thumbnails)").fetchall()
+            }
+            if columns and "thumb_path" not in columns:
+                conn.execute("DROP TABLE thumbnails")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS thumbnails (
+                    source_path TEXT NOT NULL,
+                    mtime_ns INTEGER NOT NULL,
+                    size INTEGER NOT NULL,
+                    thumb_path TEXT NOT NULL,
+                    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                    PRIMARY KEY (source_path, mtime_ns, size)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_thumbnails_lookup
+                ON thumbnails (source_path, size, mtime_ns)
+                """
+            )
+
     def _get_thumbnail(self, path: str, size: int) -> str:
         orig_p = Path(path)
-        mtime = int(orig_p.stat().st_mtime)
-        safe_name = orig_p.name.replace(".", "_")
-        thumb_name = f"{safe_name}_{mtime}_{size}.webp"
-        thumb_path = self._thumb_dir / thumb_name
+        try:
+            mtime_ns = orig_p.stat().st_mtime_ns
+        except OSError:
+            return path
 
-        if thumb_path.exists():
+        path_hash = hashlib.sha1(str(orig_p).encode("utf-8")).hexdigest()[:12]
+        thumb_name = f"{orig_p.stem}_{path_hash}_{mtime_ns}_{size}.webp"
+        thumb_path = self._thumb_dir / thumb_name
+        cached = self._read_thumbnail_from_db(str(orig_p), mtime_ns, size)
+        if cached:
+            cached_path = Path(cached)
+            if cached_path.is_file():
+                return str(cached_path)
+
+        if thumb_path.is_file():
+            self._write_thumbnail_to_db(str(orig_p), mtime_ns, size, str(thumb_path))
             return str(thumb_path)
 
         try:
@@ -52,10 +97,51 @@ class ModelPreviewManager:
                 img = ImageOps.exif_transpose(img)
                 img.thumbnail((size, size), Image.Resampling.LANCZOS)
                 img.save(thumb_path, "WEBP", quality=80)
+            self._write_thumbnail_to_db(str(orig_p), mtime_ns, size, str(thumb_path))
             return str(thumb_path)
         except Exception as e:
             print(f"[yet_essential] Failed to generate thumbnail: {e}")
             return path
+
+    def _read_thumbnail_from_db(self, source_path: str, mtime_ns: int, size: int) -> str | None:
+        with sqlite3.connect(self._thumb_db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT thumb_path
+                FROM thumbnails
+                WHERE source_path = ? AND mtime_ns = ? AND size = ?
+                """,
+                (source_path, mtime_ns, size),
+            ).fetchone()
+        return str(row[0]) if row else None
+
+    def _write_thumbnail_to_db(self, source_path: str, mtime_ns: int, size: int, thumb_path: str) -> None:
+        with sqlite3.connect(self._thumb_db_path) as conn:
+            stale_rows = conn.execute(
+                "SELECT thumb_path FROM thumbnails WHERE source_path = ? AND size = ? AND mtime_ns != ?",
+                (source_path, size, mtime_ns),
+            ).fetchall()
+            conn.execute(
+                """
+                DELETE FROM thumbnails
+                WHERE source_path = ? AND size = ? AND mtime_ns != ?
+                """,
+                (source_path, size, mtime_ns),
+            )
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO thumbnails (source_path, mtime_ns, size, thumb_path)
+                VALUES (?, ?, ?, ?)
+                """,
+                (source_path, mtime_ns, size, thumb_path),
+            )
+        for row in stale_rows:
+            stale_path = Path(str(row[0]))
+            if stale_path != Path(thumb_path) and stale_path.is_file():
+                try:
+                    stale_path.unlink()
+                except OSError:
+                    continue
 
     def _find_on_disk(self, folder_type: str, model_name: str) -> str | None:
         full_path = folder_paths.get_full_path(folder_type, model_name)

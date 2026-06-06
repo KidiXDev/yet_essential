@@ -61,7 +61,6 @@ async def get_model_preview(request: web.Request) -> web.Response:
     preview_path = MODEL_PREVIEW_MANAGER.find_preview(folder_type, model_name, res=res)
     if not preview_path or not os.path.exists(preview_path):
         return web.Response(status=404)
-
     return web.FileResponse(preview_path)
 
 
