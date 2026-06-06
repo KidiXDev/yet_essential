@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -69,6 +70,31 @@ def _read_prompt_value(prompt_value: Any, node_name: str, input_name: str) -> st
     raise RuntimeError(
         f"{node_name}: invalid '{input_name}' input. Connect it from YE Prompt output."
     )
+
+
+def _read_dynamic_node_inputs(kwargs: dict[str, Any]) -> dict[str, Any]:
+    prompt = kwargs.get("prompt", {})
+    node_id = kwargs.get("unique_id", None)
+    if prompt and node_id is not None:
+        prompt_key = str(node_id)
+        if prompt_key in prompt:
+            inputs = prompt[prompt_key].get("inputs", {})
+            if isinstance(inputs, dict):
+                return inputs
+        if node_id in prompt:
+            inputs = prompt[node_id].get("inputs", {})
+            if isinstance(inputs, dict):
+                return inputs
+    return {}
+
+
+def _collect_lora_slot_indexes(inputs: dict[str, Any]) -> list[int]:
+    indexes: set[int] = set()
+    for key in inputs.keys():
+        match = re.match(r"^lora_name_(\d+)$", str(key))
+        if match:
+            indexes.add(int(match.group(1)))
+    return sorted(indexes) if indexes else [1]
 
 
 class YEPrompt(io.ComfyNode):
@@ -1060,32 +1086,25 @@ class YELoadLoraModel(io.ComfyNode):
 
 
 class YELoraStack(io.ComfyNode):
-    MAX_SLOTS = 8
     NONE_OPTION = "None"
 
     @classmethod
     def define_schema(cls) -> io.Schema:
         lora_options = [cls.NONE_OPTION, *folder_paths.get_filename_list("loras")]
-        inputs: list[Any] = [
-            io.Model.Input("model"),
-            io.Clip.Input("clip"),
-        ]
-        for idx in range(1, cls.MAX_SLOTS + 1):
-            inputs.extend(
-                [
-                    io.Boolean.Input(f"enabled_{idx}", default=True),
-                    io.Combo.Input(f"lora_name_{idx}", options=lora_options, default=cls.NONE_OPTION),
-                    io.Float.Input(f"strength_model_{idx}", default=1.0, min=-20.0, max=20.0, step=0.01),
-                    io.Float.Input(f"strength_clip_{idx}", default=1.0, min=-20.0, max=20.0, step=0.01),
-                ]
-            )
-
         return io.Schema(
             node_id="YELoraStack",
             display_name="YE LoRA Stack",
             category="yet_essential/loaders",
-            inputs=inputs,
+            inputs=[
+                io.Model.Input("model"),
+                io.Clip.Input("clip"),
+                io.Boolean.Input("enabled_1", default=True),
+                io.Combo.Input("lora_name_1", options=lora_options, default=cls.NONE_OPTION),
+                io.Float.Input("strength_model_1", default=1.0, min=-20.0, max=20.0, step=0.01),
+                io.Float.Input("strength_clip_1", default=1.0, min=-20.0, max=20.0, step=0.01),
+            ],
             outputs=[io.Model.Output(), io.Clip.Output()],
+            hidden=[io.Hidden.prompt, io.Hidden.unique_id],
         )
 
     @classmethod
@@ -1098,16 +1117,26 @@ class YELoraStack(io.ComfyNode):
         model_out = model
         clip_out = clip
 
-        for idx in range(1, cls.MAX_SLOTS + 1):
-            if not bool(kwargs.get(f"enabled_{idx}", True)):
+        dynamic_inputs = _read_dynamic_node_inputs(kwargs)
+        slot_indexes = _collect_lora_slot_indexes(dynamic_inputs)
+
+        for idx in slot_indexes:
+            enabled = dynamic_inputs.get(f"enabled_{idx}", kwargs.get(f"enabled_{idx}", True))
+            if not bool(enabled):
                 continue
 
-            lora_name = cls._slot_lora_name(kwargs.get(f"lora_name_{idx}"))
+            lora_name = cls._slot_lora_name(
+                dynamic_inputs.get(f"lora_name_{idx}", kwargs.get(f"lora_name_{idx}"))
+            )
             if not lora_name:
                 continue
 
-            strength_model = float(kwargs.get(f"strength_model_{idx}", 1.0))
-            strength_clip = float(kwargs.get(f"strength_clip_{idx}", 1.0))
+            strength_model = float(
+                dynamic_inputs.get(f"strength_model_{idx}", kwargs.get(f"strength_model_{idx}", 1.0))
+            )
+            strength_clip = float(
+                dynamic_inputs.get(f"strength_clip_{idx}", kwargs.get(f"strength_clip_{idx}", 1.0))
+            )
             if strength_model == 0 and strength_clip == 0:
                 continue
 
@@ -1127,30 +1156,23 @@ class YELoraStack(io.ComfyNode):
 
 
 class YELoraStackModel(io.ComfyNode):
-    MAX_SLOTS = 8
     NONE_OPTION = "None"
 
     @classmethod
     def define_schema(cls) -> io.Schema:
         lora_options = [cls.NONE_OPTION, *folder_paths.get_filename_list("loras")]
-        inputs: list[Any] = [
-            io.Model.Input("model"),
-        ]
-        for idx in range(1, cls.MAX_SLOTS + 1):
-            inputs.extend(
-                [
-                    io.Boolean.Input(f"enabled_{idx}", default=True),
-                    io.Combo.Input(f"lora_name_{idx}", options=lora_options, default=cls.NONE_OPTION),
-                    io.Float.Input(f"strength_model_{idx}", default=1.0, min=-20.0, max=20.0, step=0.01),
-                ]
-            )
-
         return io.Schema(
             node_id="YELoraStackModel",
             display_name="YE LoRA Stack (Model Only)",
             category="yet_essential/loaders",
-            inputs=inputs,
+            inputs=[
+                io.Model.Input("model"),
+                io.Boolean.Input("enabled_1", default=True),
+                io.Combo.Input("lora_name_1", options=lora_options, default=cls.NONE_OPTION),
+                io.Float.Input("strength_model_1", default=1.0, min=-20.0, max=20.0, step=0.01),
+            ],
             outputs=[io.Model.Output()],
+            hidden=[io.Hidden.prompt, io.Hidden.unique_id],
         )
 
     @classmethod
@@ -1162,15 +1184,23 @@ class YELoraStackModel(io.ComfyNode):
     def execute(cls, model: io.Model.Type, **kwargs: Any) -> io.NodeOutput:
         model_out = model
 
-        for idx in range(1, cls.MAX_SLOTS + 1):
-            if not bool(kwargs.get(f"enabled_{idx}", True)):
+        dynamic_inputs = _read_dynamic_node_inputs(kwargs)
+        slot_indexes = _collect_lora_slot_indexes(dynamic_inputs)
+
+        for idx in slot_indexes:
+            enabled = dynamic_inputs.get(f"enabled_{idx}", kwargs.get(f"enabled_{idx}", True))
+            if not bool(enabled):
                 continue
 
-            lora_name = cls._slot_lora_name(kwargs.get(f"lora_name_{idx}"))
+            lora_name = cls._slot_lora_name(
+                dynamic_inputs.get(f"lora_name_{idx}", kwargs.get(f"lora_name_{idx}"))
+            )
             if not lora_name:
                 continue
 
-            strength_model = float(kwargs.get(f"strength_model_{idx}", 1.0))
+            strength_model = float(
+                dynamic_inputs.get(f"strength_model_{idx}", kwargs.get(f"strength_model_{idx}", 1.0))
+            )
             if strength_model == 0:
                 continue
 

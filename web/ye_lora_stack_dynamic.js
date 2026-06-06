@@ -2,7 +2,6 @@ import { app } from "../../scripts/app.js";
 
 const EXTENSION_NAME = "yet_essential.lora_stack_dynamic_widgets";
 const TARGET_NODE_NAMES = ["YELoraStack", "YELoraStackModel"];
-const MAX_SLOTS = 8;
 const SLOT_NONE = "None";
 const DEFAULT_STRENGTH = 1.0;
 
@@ -190,7 +189,7 @@ function parseSavedSlots(node, values) {
     }
 
     const chunkSize = (node?.comfyClass || node?.type) === "YELoraStackModel" ? 3 : 4;
-    for (let offset = 0; offset < values.length && rows.length < MAX_SLOTS; offset += 1) {
+    for (let offset = 0; offset < values.length; offset += 1) {
         const enabled = values[offset];
         const loraName = values[offset + 1];
         const strengthModel = values[offset + 2];
@@ -276,7 +275,7 @@ function ensureButtonOrder(node) {
 }
 
 function removeInitialExtraRows(node) {
-    for (let index = MAX_SLOTS; index >= 2; index -= 1) {
+    for (let index = countLoraRows(node); index >= 2; index -= 1) {
         for (const widget of getSlotWidgets(node, index)) {
             removeWidget(node, widget);
         }
@@ -287,9 +286,6 @@ function ensureButtons(node) {
     if (!node.__yeAddLoraButton) {
         const addBtn = node.addWidget("button", "Add LoRA", "Add LoRA", () => {
             const nextIndex = countLoraRows(node) + 1;
-            if (nextIndex > MAX_SLOTS) {
-                return;
-            }
             addLoraRow(node, nextIndex);
             node.updateRemoveBtn?.();
             refreshNodeLayout(node);
