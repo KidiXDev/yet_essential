@@ -29,15 +29,15 @@ class YEEmptyLatentImage(io.ComfyNode):
             category="yet_essential/latent",
             inputs=[
                 io.Combo.Input("preset", options=list(cls.DIMENSION_PRESETS.keys()), default="Custom"),
+                io.Int.Input("batch_size", default=1, min=1, max=64),
                 io.Int.Input("width", default=1024, min=16, max=8192, step=8, optional=True),
                 io.Int.Input("height", default=1024, min=16, max=8192, step=8, optional=True),
-                io.Int.Input("batch_size", default=1, min=1, max=64),
             ],
             outputs=[io.Latent.Output()],
         )
 
     @classmethod
-    def execute(cls, preset: str, width: int = 1024, height: int = 1024, batch_size: int = 1) -> io.NodeOutput:
+    def execute(cls, preset: str, batch_size: int = 1, width: int = 1024, height: int = 1024) -> io.NodeOutput:
         if preset != "Custom":
             width, height = cls.DIMENSION_PRESETS[preset]
         latent = torch.zeros([batch_size, 4, height // 8, width // 8])

@@ -66,22 +66,35 @@ function shouldShowCustomDimensions(node) {
     );
 }
 
-function insertBeforeBatch(node, widgets) {
-    const batchWidget = findWidgetByName(node, BATCH_WIDGET_NAME);
-    if (!batchWidget) {
+function enforceWidgetOrder(node) {
+    if (!Array.isArray(node.widgets)) {
         return;
     }
 
-    const batchIndex = node.widgets.indexOf(batchWidget);
-    if (batchIndex === -1) {
+    const orderedWidgets = [
+        findWidgetByName(node, PRESET_WIDGET_NAME),
+        findWidgetByName(node, BATCH_WIDGET_NAME),
+        findWidgetByName(node, "width"),
+        findWidgetByName(node, "height"),
+    ].filter(Boolean);
+
+    if (orderedWidgets.length < 2) {
         return;
     }
 
-    for (const widget of widgets) {
+    const indexes = orderedWidgets
+        .map((widget) => node.widgets.indexOf(widget))
+        .filter((index) => index >= 0);
+    if (indexes.length === 0) {
+        return;
+    }
+
+    const insertIndex = Math.min(...indexes);
+    for (const widget of orderedWidgets) {
         removeWidget(node, widget);
     }
 
-    node.widgets.splice(batchIndex, 0, ...widgets);
+    node.widgets.splice(insertIndex, 0, ...orderedWidgets);
 }
 
 function addDimensionWidget(node, name, value, template) {
@@ -118,7 +131,7 @@ function addDimensions(node) {
     }
 
     if (created.length > 0) {
-        insertBeforeBatch(node, created);
+        enforceWidgetOrder(node);
     }
 }
 
@@ -136,6 +149,7 @@ function updatePresetWidgets(node) {
         removeDimensions(node);
     }
 
+    enforceWidgetOrder(node);
     refreshNodeLayout(node);
 }
 

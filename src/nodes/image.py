@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import math
+import os
+from typing import Any
 
 import comfy.model_management as model_management
 import comfy.sample
@@ -8,11 +12,131 @@ import comfy.samplers
 import comfy.utils
 import folder_paths
 import latent_preview
+import numpy as np
 import torch
 import torch.nn.functional as F
+from comfy.cli_args import args
+from PIL import Image
+from PIL.PngImagePlugin import PngInfo
 from spandrel import ImageModelDescriptor, ModelLoader
 
 from comfy_api.latest import io
+
+from .common import YEImageMetadataPipe
+
+_MODEL_HASH_CACHE: dict[str, tuple[int, int, str]] = {}
+
+
+def _metadata_text(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _metadata_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _metadata_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _format_metadata_number(value: Any) -> str:
+    if isinstance(value, float):
+        return f"{value:g}"
+    return str(value)
+
+
+def _checkpoint_hash(ckpt_name: str) -> str:
+    model_name = _metadata_text(ckpt_name)
+    if not model_name:
+        return ""
+    model_path = folder_paths.get_full_path("checkpoints", model_name)
+    if not model_path or not os.path.isfile(model_path):
+        return ""
+
+    stat = os.stat(model_path)
+    cached = _MODEL_HASH_CACHE.get(model_path)
+    if cached and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
+        return cached[2]
+
+    digest = hashlib.sha256()
+    with open(model_path, "rb") as model_file:
+        for chunk in iter(lambda: model_file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    model_hash = digest.hexdigest()[:10]
+    _MODEL_HASH_CACHE[model_path] = (stat.st_mtime_ns, stat.st_size, model_hash)
+    return model_hash
+
+
+def _make_a1111_parameters(metadata_pipe: Any, width: int, height: int) -> str:
+    if not isinstance(metadata_pipe, dict):
+        return ""
+    positive = _metadata_text(metadata_pipe.get("positive"))
+    negative = _metadata_text(metadata_pipe.get("negative"))
+    fields = dict(metadata_pipe.get("fields") or {})
+    fields["Size"] = f"{width}x{height}"
+    parts = [positive] if positive else []
+    if negative:
+        parts.append(f"Negative prompt: {negative}")
+    if fields:
+        field_text = [
+            f"{key}: {_format_metadata_number(value)}"
+            for key, value in fields.items()
+            if _metadata_text(value)
+        ]
+        parts.append(", ".join(field_text))
+    return "\n".join(part for part in parts if part)
+
+
+def _create_ye_png_metadata(metadata_pipe: Any, width: int, height: int, hidden: Any) -> PngInfo | None:
+    if args.disable_metadata:
+        return None
+    metadata = PngInfo()
+    prompt = getattr(hidden, "prompt", None) if hidden is not None else None
+    extra_pnginfo = getattr(hidden, "extra_pnginfo", None) if hidden is not None else None
+    parameters = _make_a1111_parameters(metadata_pipe, width, height)
+    if parameters:
+        metadata.add_text("parameters", parameters)
+    if prompt is not None:
+        metadata.add_text("prompt", json.dumps(prompt))
+    if extra_pnginfo is not None:
+        for key, value in extra_pnginfo.items():
+            metadata.add_text(key, json.dumps(value))
+    return metadata
+
+
+def _save_ye_images(
+    images: torch.Tensor,
+    filename_prefix: str,
+    metadata_pipe: Any,
+    hidden: Any,
+    *,
+    compress_level: int = 4,
+) -> list[dict[str, str]]:
+    full_output_folder, filename, counter, subfolder, _ = folder_paths.get_save_image_path(
+        filename_prefix,
+        folder_paths.get_output_directory(),
+        images[0].shape[1],
+        images[0].shape[0],
+    )
+    results: list[dict[str, str]] = []
+    for batch_number, image in enumerate(images):
+        arr = 255.0 * image.cpu().numpy()
+        img = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
+        pnginfo = _create_ye_png_metadata(metadata_pipe, img.width, img.height, hidden)
+        filename_with_batch_num = filename.replace("%batch_num%", str(batch_number))
+        file = f"{filename_with_batch_num}_{counter:05}_.png"
+        img.save(os.path.join(full_output_folder, file), pnginfo=pnginfo, compress_level=compress_level)
+        results.append({"filename": file, "subfolder": subfolder, "type": "output"})
+        counter += 1
+    return results
 
 
 def _load_upscale_model_descriptor(upscale_model: str) -> ImageModelDescriptor:
@@ -336,4 +460,120 @@ class YEHiResFix(io.ComfyNode):
         return io.NodeOutput(out_latent, torch.clamp(out_image, 0.0, 1.0))
 
 
-NODE_LIST = [YEImageUpscale, YEImageResize, YEColorMatch, YEMaskUtility, YEHiResFix]
+class YEImageMetadataConnector(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="YEImageMetadataConnector",
+            display_name="YE Image Metadata Connector",
+            category="yet_essential/image",
+            inputs=[
+                io.String.Input("positive", default="", multiline=True, dynamic_prompts=True),
+                io.String.Input("negative", default="", multiline=True, dynamic_prompts=True),
+                io.Int.Input("seed", default=0, min=0, max=0x7FFFFFFFFFFFFFFF),
+                io.Int.Input("steps", default=20, min=1, max=10000),
+                io.Float.Input("cfg", default=7.0, min=0.0, max=100.0, step=0.1, round=0.01),
+                io.Combo.Input("sampler_name", options=list(comfy.samplers.KSampler.SAMPLERS)),
+                io.Combo.Input("scheduler", options=list(comfy.samplers.KSampler.SCHEDULERS)),
+                io.Combo.Input("model", options=["", *folder_paths.get_filename_list("checkpoints")], default=""),
+                io.Float.Input("denoise", default=0.0, min=0.0, max=1.0, step=0.01),
+            ],
+            outputs=[YEImageMetadataPipe.Output(display_name="metadata_pipe")],
+        )
+
+    @classmethod
+    def execute(
+        cls,
+        positive: str,
+        negative: str,
+        seed: int,
+        steps: int,
+        cfg: float,
+        sampler_name: str,
+        scheduler: str,
+        model: str,
+        denoise: float,
+    ) -> io.NodeOutput:
+        fields: dict[str, Any] = {
+            "Steps": _metadata_int(steps),
+            "Sampler": _metadata_text(sampler_name),
+            "Schedule type": _metadata_text(scheduler),
+            "CFG scale": _metadata_float(cfg),
+            "Seed": _metadata_int(seed),
+        }
+        model = _metadata_text(model)
+        model_hash = _checkpoint_hash(model)
+        denoise = _metadata_float(denoise)
+        if model:
+            fields["Model"] = model
+        if model_hash:
+            fields["Model hash"] = model_hash
+        if denoise > 0:
+            fields["Denoising strength"] = denoise
+        return io.NodeOutput(
+            {
+                "positive": _metadata_text(positive),
+                "negative": _metadata_text(negative),
+                "fields": fields,
+            }
+        )
+
+
+class YEImageSave(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="YEImageSave",
+            display_name="YE Save Image",
+            category="yet_essential/image",
+            inputs=[
+                io.Image.Input("images"),
+                io.String.Input("filename_prefix", default="ComfyUI"),
+                YEImageMetadataPipe.Input("metadata_pipe", optional=True),
+            ],
+            outputs=[],
+            hidden=[io.Hidden.prompt, io.Hidden.extra_pnginfo],
+            is_output_node=True,
+            search_aliases=["save", "save image", "metadata", "civitai"],
+        )
+
+    @classmethod
+    def execute(cls, images: io.Image.Type, filename_prefix: str = "ComfyUI", metadata_pipe: Any = None) -> io.NodeOutput:
+        results = _save_ye_images(images, filename_prefix, metadata_pipe, getattr(cls, "hidden", None))
+        return io.NodeOutput(ui={"images": results})
+
+
+class YEImageSaveBridge(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="YEImageSaveBridge",
+            display_name="YE Save Image (Bridge)",
+            category="yet_essential/image",
+            inputs=[
+                io.Image.Input("images"),
+                io.String.Input("filename_prefix", default="ComfyUI"),
+                YEImageMetadataPipe.Input("metadata_pipe", optional=True),
+            ],
+            outputs=[io.Image.Output(display_name="images")],
+            hidden=[io.Hidden.prompt, io.Hidden.extra_pnginfo],
+            is_output_node=True,
+            search_aliases=["save", "save image", "bridge", "metadata", "civitai"],
+        )
+
+    @classmethod
+    def execute(cls, images: io.Image.Type, filename_prefix: str = "ComfyUI", metadata_pipe: Any = None) -> io.NodeOutput:
+        results = _save_ye_images(images, filename_prefix, metadata_pipe, getattr(cls, "hidden", None))
+        return io.NodeOutput(images, ui={"images": results})
+
+
+NODE_LIST = [
+    YEImageUpscale,
+    YEImageResize,
+    YEColorMatch,
+    YEMaskUtility,
+    YEHiResFix,
+    YEImageMetadataConnector,
+    YEImageSave,
+    YEImageSaveBridge,
+]

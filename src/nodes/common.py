@@ -8,6 +8,7 @@ from comfy_api.latest import io
 
 YEPostFXPipe = io.Custom("YE_POSTFX_PIPE")
 YEPromptValue = io.Custom("YE_PROMPT_VALUE")
+YEImageMetadataPipe = io.Custom("YE_IMAGE_METADATA_PIPE")
 YELLMProviderValue = io.Custom("YE_LLM_PROVIDER")
 YELLMPipe = io.Custom("YE_LLM_PIPE")
 YELLMConfigValue = io.Custom("YE_LLM_CONFIG")
