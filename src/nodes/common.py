@@ -240,7 +240,7 @@ def read_dynamic_node_inputs(kwargs: dict[str, Any]) -> dict[str, Any]:
 def collect_lora_slot_indexes(inputs: dict[str, Any]) -> list[int]:
     indexes: set[int] = set()
     for key in inputs.keys():
-        match = re.match(r"^lora_name_(\d+)$", str(key))
+        match = re.match(r"^(?:enabled|lora_name|strength_model|strength_clip)_(\d+)$", str(key))
         if match:
             indexes.add(int(match.group(1)))
     return sorted(indexes) if indexes else [1]

@@ -131,7 +131,7 @@ class YELoraStack(io.ComfyNode):
         model_out = model
         clip_out = clip
         dynamic_inputs = read_dynamic_node_inputs(kwargs)
-        slot_indexes = collect_lora_slot_indexes(dynamic_inputs)
+        slot_indexes = collect_lora_slot_indexes(kwargs | dynamic_inputs)
         for idx in slot_indexes:
             enabled = dynamic_inputs.get(f"enabled_{idx}", kwargs.get(f"enabled_{idx}", True))
             if not bool(enabled):
@@ -180,7 +180,7 @@ class YELoraStackModel(io.ComfyNode):
     def execute(cls, model: io.Model.Type, **kwargs: Any) -> io.NodeOutput:
         model_out = model
         dynamic_inputs = read_dynamic_node_inputs(kwargs)
-        slot_indexes = collect_lora_slot_indexes(dynamic_inputs)
+        slot_indexes = collect_lora_slot_indexes(kwargs | dynamic_inputs)
         for idx in slot_indexes:
             enabled = dynamic_inputs.get(f"enabled_{idx}", kwargs.get(f"enabled_{idx}", True))
             if not bool(enabled):
