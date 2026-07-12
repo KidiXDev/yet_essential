@@ -208,7 +208,7 @@ def fetch_model_catalog(
     timeout: int = 60,
 ) -> list[dict[str, str]]:
     provider_key = normalize_provider(provider)
-    resolved_base_url = normalize_base_url(base_url or default_base_url(provider_key))
+    resolved_base_url = normalize_base_url(default_base_url(provider_key))
     cache_key = (provider_key, resolved_base_url, str(api_key or "").strip())
     now = time.time()
 

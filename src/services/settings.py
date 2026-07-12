@@ -58,7 +58,10 @@ class Settings:
                     elif key == "smart_suffix":
                         self.smart_suffix = value.lower() == "true"
                     elif key == "csv_file":
-                        self.csv_file = value
+                        try:
+                            self.csv_file = self._validate_csv_file(value)
+                        except ValueError:
+                            pass
         except Exception as e:
             print(f"[yet_essential] Failed to load settings: {e}")
 
@@ -90,10 +93,11 @@ class Settings:
             print(f"[yet_essential] Failed to save settings: {e}")
 
     def update(self, data: dict[str, Any]) -> None:
+        csv_file = self._validate_csv_file(str(data["csv_file"])) if "csv_file" in data else None
         if "search_algorithm" in data:
             self.algorithm = str(data["search_algorithm"]).lower()
-        if "csv_file" in data:
-            self.csv_file = str(data["csv_file"])
+        if csv_file is not None:
+            self.csv_file = csv_file
         if "search_limit" in data:
             try:
                 self.limit = min(200, max(1, int(data["search_limit"])))
@@ -116,6 +120,20 @@ class Settings:
         if "smart_suffix" in data:
             self.smart_suffix = bool(data["smart_suffix"])
         self.save()
+
+    def _validate_csv_file(self, value: str) -> str:
+        name = value.strip()
+        tag_dir = (self.path.parent / "tag").resolve()
+        candidate = tag_dir / name
+        if (
+            not name
+            or Path(name).name != name
+            or candidate.suffix.lower() != ".csv"
+            or not candidate.is_file()
+            or not candidate.resolve().is_relative_to(tag_dir)
+        ):
+            raise ValueError("csv_file must name a CSV file in config/tag")
+        return name
 
     @staticmethod
     def _normalize_autocomplete_position(value: str) -> str:

@@ -58,7 +58,10 @@ async def get_model_preview(request: web.Request) -> web.Response:
     if not folder_type or not model_name:
         return web.Response(status=400)
 
-    preview_path = MODEL_PREVIEW_MANAGER.find_preview(folder_type, model_name, res=res)
+    try:
+        preview_path = MODEL_PREVIEW_MANAGER.find_preview(folder_type, model_name, res=res)
+    except ValueError:
+        return web.Response(status=400)
     if not preview_path or not os.path.exists(preview_path):
         return web.Response(status=404)
     return web.FileResponse(preview_path)
@@ -92,7 +95,10 @@ async def update_settings(request: web.Request) -> web.Response:
         return web.Response(status=400)
 
     old_csv = SETTINGS.csv_file
-    SETTINGS.update(data)
+    try:
+        SETTINGS.update(data)
+    except ValueError as err:
+        return web.json_response({"error": str(err)}, status=400)
 
     if SETTINGS.csv_file != old_csv:
         TAG_INDEX.update_path(BASE_DIR / "config" / "tag" / SETTINGS.csv_file)

@@ -12,6 +12,8 @@ from PIL import Image, ImageOps
 
 
 class ModelPreviewManager:
+    SUPPORTED_THUMBNAIL_SIZES = {300}
+
     def __init__(self, base_dir: Path) -> None:
         self._cache: dict[str, str | None] = {}
         self._lock = threading.Lock()
@@ -24,6 +26,8 @@ class ModelPreviewManager:
         self._init_thumb_db()
 
     def find_preview(self, folder_type: str, model_name: str, res: int | None = None) -> str | None:
+        if res is not None and res not in self.SUPPORTED_THUMBNAIL_SIZES:
+            raise ValueError("Unsupported thumbnail size")
         cache_key = f"{folder_type}:{model_name}"
         if res:
             cache_key = f"{cache_key}:{res}"
