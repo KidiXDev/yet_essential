@@ -6,6 +6,7 @@ A collection of high-performance, quality-of-life, and artist-focused nodes for 
 
 ### 🔍 Smart Tag Autocomplete
 Highly optimized autocomplete for the **YE Prompt** node.
+- **ComfyUI Node 2.0 Ready:** Fully supports the new ComfyUI Node 2.0 frontend interface.
 - **Fuzzy & Prefix Matching:** Fast and flexible searching through large tag lists (e.g., Danbooru datasets).
 - **Aliases Support:** Match tags via their recognized aliases.
 - **Configurable:** Tweak algorithms, limits, and formatting via `config/setting.cfg`.
@@ -32,14 +33,23 @@ A professional-grade post-processing system with stackable effects.
     - **Vignette:** Adjustable strength and softness.
 - **Non-Destructive:** Build effect pipelines and apply them late in your workflow.
 
+### 🤖 LLM Prompt Suite
+Generate and enhance prompts using Large Language Models directly inside ComfyUI.
+- **Multi-Provider Support:** Seamlessly connect to API providers like **OpenRouter**, **NanoGPT**, or any standard **OpenAI-Compatible** API.
+- **Asynchronous Model List:** The UI automatically fetches and lists available models from your provider in real-time.
+- **Dynamic Interface:** Inputs adapt dynamically to show only the relevant configuration options for your selected provider.
+- **Chat & Pipeline Builder:** Chain messages (system, user, assistant) and build structured workflows using dynamic chat inputs.
+- **Ready-Made Templates:** Instantly load visual and anime prompt-engineering presets (stored in `config/prompt.json`):
+    - **Prompt Creator (Flux/SDXL):** Expand simple user concepts into highly detailed scene descriptions.
+    - **Booru Tag Prompt Creator:** Convert simple phrases into Danbooru-style tag lists.
+    - **Prompt Enhancer:** Embellish and refine existing prompts with details, lighting, and composition.
+    - **Cinematic Scene Builder:** Generate cinematic camera, lens, lighting, and atmospheric parameters.
+- **Reasoning Cleanup:** Automatically strips `<think>` / reasoning tags (common in models like DeepSeek-R1) to output clean prompt text.
+
 ### 🛠️ Essential Utilities
 - **YE Empty Latent Image:** Includes industry-standard presets for SD1.5 and SDXL (Square, Landscape, Portrait).
 - **YE Image Upscale:** Tiled, memory-safe upscaling using external models.
-- **Streamlined Loaders:** Simplified loaders for Checkpoints, UNETs, and LoRAs.
-
-## 🧩 Compatibility
-
-- **Node 2.0 Support:** Fully compatible with ComfyUI Node 2.0.
+- **Streamlined Loaders:** Simplified, clean loaders for Checkpoints, UNETs, and LoRAs (including model-only loaders), plus a stackable LoRA loader with a dynamic slot interface.
 
 ## 📦 Installation
 
@@ -57,4 +67,4 @@ Place your tag CSV files in `config/tag/` to enable autocomplete for specific da
 
 ## 📄 License
 
-Apache Software License 2.0
+[Apache Software License 2.0](./LICENSE)
