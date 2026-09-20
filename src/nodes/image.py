@@ -33,6 +33,27 @@ def _metadata_text(value: Any) -> str:
     return str(value).strip()
 
 
+def _metadata_model(value: Any) -> tuple[str, str | None]:
+    if isinstance(value, str):
+        model_name = value.strip()
+        return model_name, folder_paths.get_full_path("checkpoints", model_name) if model_name else None
+
+    cached_init = getattr(value, "cached_patcher_init", None)
+    if not cached_init or not cached_init[1] or not isinstance(cached_init[1][0], (str, os.PathLike)):
+        return "", None
+
+    model_path = os.path.abspath(os.fspath(cached_init[1][0]))
+    for folder_type in ("checkpoints", "diffusion_models"):
+        for model_dir in folder_paths.get_folder_paths(folder_type):
+            try:
+                relative_path = os.path.relpath(model_path, model_dir)
+            except ValueError:
+                continue
+            if relative_path != os.pardir and not relative_path.startswith(f"{os.pardir}{os.sep}"):
+                return relative_path, model_path
+    return os.path.basename(model_path), model_path
+
+
 def _metadata_int(value: Any, default: int = 0) -> int:
     try:
         return int(value)
@@ -53,11 +74,7 @@ def _format_metadata_number(value: Any) -> str:
     return str(value)
 
 
-def _checkpoint_hash(ckpt_name: str) -> str:
-    model_name = _metadata_text(ckpt_name)
-    if not model_name:
-        return ""
-    model_path = folder_paths.get_full_path("checkpoints", model_name)
+def _model_hash(model_path: str | None) -> str:
     if not model_path or not os.path.isfile(model_path):
         return ""
 
@@ -475,7 +492,7 @@ class YEImageMetadataConnector(io.ComfyNode):
                 io.Float.Input("cfg", default=7.0, min=0.0, max=100.0, step=0.1, round=0.01),
                 io.Combo.Input("sampler_name", options=list(comfy.samplers.KSampler.SAMPLERS)),
                 io.Combo.Input("scheduler", options=list(comfy.samplers.KSampler.SCHEDULERS)),
-                io.Combo.Input("model", options=["", *folder_paths.get_filename_list("checkpoints")], default=""),
+                io.Model.Input("model", optional=True),
                 io.Float.Input("denoise", default=0.0, min=0.0, max=1.0, step=0.01),
             ],
             outputs=[YEImageMetadataPipe.Output(display_name="metadata_pipe")],
@@ -491,8 +508,8 @@ class YEImageMetadataConnector(io.ComfyNode):
         cfg: float,
         sampler_name: str,
         scheduler: str,
-        model: str,
         denoise: float,
+        model: Any = None,
     ) -> io.NodeOutput:
         fields: dict[str, Any] = {
             "Steps": _metadata_int(steps),
@@ -501,8 +518,8 @@ class YEImageMetadataConnector(io.ComfyNode):
             "CFG scale": _metadata_float(cfg),
             "Seed": _metadata_int(seed),
         }
-        model = _metadata_text(model)
-        model_hash = _checkpoint_hash(model)
+        model, model_path = _metadata_model(model)
+        model_hash = _model_hash(model_path)
         denoise = _metadata_float(denoise)
         if model:
             fields["Model"] = model
